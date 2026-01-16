@@ -150,6 +150,21 @@ with st.sidebar:
         bed_type = st.selectbox("Bed Size", 
                                ["King (1800x2000)", "Queen (1600x2000)", 
                                 "Double (1400x1900)", "Single (1200x1900)"])
+
+        bed_wall_label = st.selectbox(
+            "Bed Wall (Anchoring)",
+            ["Auto", "Top", "Bottom", "Left", "Right"],
+            index=0,
+            help="Forces the bed group to anchor to the selected wall (cannot be the window wall)."
+        )
+
+        bed_wall_preference = {
+            "Auto": "auto",
+            "Top": "top",
+            "Bottom": "bottom",
+            "Left": "left",
+            "Right": "right",
+        }[bed_wall_label]
         
         # New bed configuration options
         bedside_table_count = st.slider("Bedside Tables", 0, 2, 2)
@@ -264,6 +279,7 @@ if generate_btn or st.session_state.layout:
                     window_width=window_width,
                     window_sill=window_sill,
                     internal_wall_gap=internal_wall_gap,
+                    bed_wall_preference=bed_wall_preference,
                     bed_type=bed_type_val,
                     wardrobe_mode=wardrobe_mode,
                     wardrobe_width=wardrobe_width,
@@ -333,11 +349,16 @@ if generate_btn or st.session_state.layout:
     # Tab 2: 3D View
     with tab2:
         st.markdown("### 🏗️ 3D Visualization")
-        
+
         fig_3d = st.session_state.engine.generate_3d_view(st.session_state.layout)
-        st.pyplot(fig_3d)
-        
-        st.info("Use mouse to rotate 3D view. Left drag: rotate, Right drag: zoom, Middle drag: pan")
+
+        # Prefer Plotly for true 360° orbit. Fall back to matplotlib if Plotly is unavailable.
+        if hasattr(fig_3d, "to_dict") and hasattr(fig_3d, "update_layout"):
+            st.plotly_chart(fig_3d, use_container_width=True)
+            st.info("360° Orbit: left-drag rotate (orbit), scroll to zoom, right-drag pan")
+        else:
+            st.pyplot(fig_3d)
+            st.info("Rotate: click+drag, scroll to zoom")
     
     # Tab 3: BOQ
     with tab3:

@@ -31,6 +31,7 @@ class BedroomEngine:
                  window_width=1800,
                  window_sill=300,
                  internal_wall_gap=200,
+                 bed_wall_preference='auto',
                  bed_type='queen',
                  wardrobe_mode='auto',
                  wardrobe_width=1800,
@@ -84,6 +85,9 @@ class BedroomEngine:
         # Internal wall
         self.internal_wall_gap = internal_wall_gap
         self.internal_wall_depth = 600
+
+        # Bed wall preference: 'auto' or one of ['top','bottom','left','right']
+        self.bed_wall_preference = (bed_wall_preference or 'auto').lower().strip()
         
         # Furniture configuration
         self.bedside_table_count = min(bedside_table_count, 2)
@@ -333,6 +337,18 @@ class BedroomEngine:
         3. Prefer longer wall
         4. Must fit bed + bedside tables if needed
         """
+        # If user forces a wall, respect it as long as it isn't the window wall
+        # and has enough length to host the bed group.
+        forced = self.bed_wall_preference
+        if forced in ['top', 'bottom', 'left', 'right'] and forced != self.window_wall:
+            wall = self.get_wall_info(forced)
+            # Calculate required width for bed setup
+            required_width = self.bed_width
+            if self.bedside_table_count > 0:
+                required_width += self.bedside_table_width * self.bedside_table_count + 100
+            if wall['length'] >= required_width:
+                return forced
+
         candidate_walls = []
         
         # Calculate required width for bed setup
@@ -373,6 +389,37 @@ class BedroomEngine:
             a = max(0, self.door_from_wall - buf)
             b = self.door_from_wall + self.door_width + buf
             intervals.append((a,b))
+
+        # Corner keep-out when the door is on an adjacent wall close to the corner.
+        # This prevents wardrobe niches/enclosures from colliding with door zones.
+        # We keep it conservative and lightweight (CAD-like behavior > perfect geometry).
+        corner_limit = 1200  # mm from corner along the door wall considered "near corner"
+        corner_keepout = buf + 600  # buf + wardrobe depth
+
+        # Door on LEFT wall near BOTTOM corner -> keep-out on BOTTOM wall near LEFT corner
+        if self.door_wall == 'left' and self.door_from_wall < corner_limit and wall_name == 'bottom':
+            intervals.append((0, corner_keepout))
+        # Door on LEFT wall near TOP corner -> keep-out on TOP wall near LEFT corner
+        if self.door_wall == 'left' and (self.internal_depth - (self.door_from_wall + self.door_width)) < corner_limit and wall_name == 'top':
+            intervals.append((0, corner_keepout))
+        # Door on RIGHT wall near BOTTOM corner -> keep-out on BOTTOM wall near RIGHT corner
+        if self.door_wall == 'right' and self.door_from_wall < corner_limit and wall_name == 'bottom':
+            intervals.append((max(0, self.internal_width - corner_keepout), self.internal_width))
+        # Door on RIGHT wall near TOP corner -> keep-out on TOP wall near RIGHT corner
+        if self.door_wall == 'right' and (self.internal_depth - (self.door_from_wall + self.door_width)) < corner_limit and wall_name == 'top':
+            intervals.append((max(0, self.internal_width - corner_keepout), self.internal_width))
+        # Door on BOTTOM wall near LEFT corner -> keep-out on LEFT wall near BOTTOM corner
+        if self.door_wall == 'bottom' and self.door_from_wall < corner_limit and wall_name == 'left':
+            intervals.append((0, corner_keepout))
+        # Door on BOTTOM wall near RIGHT corner -> keep-out on RIGHT wall near BOTTOM corner
+        if self.door_wall == 'bottom' and (self.internal_width - (self.door_from_wall + self.door_width)) < corner_limit and wall_name == 'right':
+            intervals.append((0, corner_keepout))
+        # Door on TOP wall near LEFT corner -> keep-out on LEFT wall near TOP corner
+        if self.door_wall == 'top' and self.door_from_wall < corner_limit and wall_name == 'left':
+            intervals.append((max(0, self.internal_depth - corner_keepout), self.internal_depth))
+        # Door on TOP wall near RIGHT corner -> keep-out on RIGHT wall near TOP corner
+        if self.door_wall == 'top' and (self.internal_width - (self.door_from_wall + self.door_width)) < corner_limit and wall_name == 'right':
+            intervals.append((max(0, self.internal_depth - corner_keepout), self.internal_depth))
 
         # Window interval (treat as keep-clear too if ever used)
         if self.window_wall == wall_name:
@@ -495,6 +542,10 @@ class BedroomEngine:
         bed_opposite = opposite[bed_wall]
         
         for wall_name in ['top', 'bottom', 'left', 'right']:
+            # Critical rule: wardrobe can NEVER be on the same wall as the bed.
+            # Otherwise it can overlap the anchored bed group.
+            if wall_name == bed_wall:
+                continue
             # Rule 1: Don't face bed
             if wall_name == bed_opposite:
                 continue
@@ -757,6 +808,107 @@ class BedroomEngine:
         furniture['wardrobe'] = wardrobe_data
         self.placed_furniture.append(wardrobe_data)
 
+        # --- HARD FIXES ---
+        # (A) Wardrobe must never clash with the door keep-out zone.
+        # If it does (can happen when only one wall is viable), re-position within the
+        # largest available segment away from the door interval.
+        def _rects_intersect(r1, r2):
+            x1,y1,w1,d1=r1; x2,y2,w2,d2=r2
+            return not (x1+w1 <= x2 or x2+w2 <= x1 or y1+d1 <= y2 or y2+d2 <= y1)
+
+        door_rect = None
+        if wardrobe_wall == self.door_wall:
+            # Door rectangle in internal coordinates (including ext wall offset)
+            if self.door_wall in ['top','bottom']:
+                door_rect = (door['x'], door['y']-self.external_wall_thickness, self.door_width, self.external_wall_thickness)
+            else:
+                door_rect = (door['x']-self.external_wall_thickness, door['y'], self.external_wall_thickness, self.door_width)
+
+        if door_rect is not None:
+            wr = (wardrobe_x, wardrobe_y, wardrobe_w, wardrobe_d)
+            # Expand door keepout by 200mm in all directions
+            dx,dy,dw,dd = door_rect
+            keep = (dx-200, dy-200, dw+400, dd+400)
+            if _rects_intersect(wr, keep):
+                wall = self.get_wall_info(wardrobe_wall)
+                free = []
+                cur = 0
+                for a,b in self._opening_intervals_on_wall(wardrobe_wall):
+                    if a - cur > 0:
+                        free.append((cur,a))
+                    cur = max(cur,b)
+                if wall['length'] - cur > 0:
+                    free.append((cur, wall['length']))
+
+                # choose placement that maximizes distance from the door interval center
+                if free:
+                    # door center along axis
+                    door_center = self.door_from_wall + self.door_width/2
+                    best = None
+                    for a,b in free:
+                        if (b-a) < wardrobe_w:
+                            continue
+                        cand = a if door_center < (a+b)/2 else (b-wardrobe_w)
+                        cand = max(a, min(cand, b-wardrobe_w))
+                        dist = abs((cand + wardrobe_w/2) - door_center)
+                        if best is None or dist > best[0]:
+                            best = (dist, cand)
+                    if best is not None:
+                        cand_off = best[1]
+                        wardrobe_x, wardrobe_y, wardrobe_w, wardrobe_d = self.place_item_on_wall(
+                            wardrobe_wall, wardrobe_w, wardrobe_d, offset_from_start=cand_off, center=False
+                        )
+                        wardrobe_data['x']=wardrobe_x; wardrobe_data['y']=wardrobe_y
+
+        # (B) Maintain a MIN 750mm clearance between wardrobe and bed group.
+        # We keep the bed anchored to its wall plane, but allow sliding along the wall.
+        min_clear = 750
+        bed_rect = (furniture['bed']['x'], furniture['bed']['y'], furniture['bed']['width'], furniture['bed']['depth'])
+        wr_rect  = (wardrobe_data['x'], wardrobe_data['y'], wardrobe_data['width'], wardrobe_data['depth'])
+
+        def _min_edge_distance(a, b):
+            ax,ay,aw,ad=a; bx,by,bw,bd=b
+            dx = max(bx-(ax+aw), ax-(bx+bw), 0)
+            dy = max(by-(ay+ad), ay-(by+bd), 0)
+            return max(dx, dy) if dx==0 or dy==0 else (dx**2+dy**2)**0.5
+
+        if _min_edge_distance(bed_rect, wr_rect) < min_clear:
+            # Slide along bed wall axis away from wardrobe center
+            bw = bed_rect[2]; bd = bed_rect[3]
+            ext = self.external_wall_thickness
+            if bed_wall in ['top','bottom']:
+                bed_c = bed_rect[0] + bw/2
+                wr_c  = wr_rect[0] + wr_rect[2]/2
+                dirn = -1 if bed_c > wr_c else 1
+                # compute max slide to stay inside inner boundary
+                min_x = ext
+                max_x = ext + self.internal_width - bw
+                # target shift = (min_clear - current_clear) + 50 buffer
+                shift = dirn * (min_clear - _min_edge_distance(bed_rect, wr_rect) + 50)
+                new_x = max(min_x, min(max_x, bed_rect[0] + shift))
+                dxy = new_x - bed_rect[0]
+                # apply to bed group
+                for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
+                    if k in furniture:
+                        furniture[k]['x'] += dxy
+                bed_rect = (furniture['bed']['x'], furniture['bed']['y'], furniture['bed']['width'], furniture['bed']['depth'])
+            else:
+                bed_c = bed_rect[1] + bd/2
+                wr_c  = wr_rect[1] + wr_rect[3]/2
+                dirn = -1 if bed_c > wr_c else 1
+                min_y = ext
+                max_y = ext + self.internal_depth - bd
+                shift = dirn * (min_clear - _min_edge_distance(bed_rect, wr_rect) + 50)
+                new_y = max(min_y, min(max_y, bed_rect[1] + shift))
+                dxy = new_y - bed_rect[1]
+                for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
+                    if k in furniture:
+                        furniture[k]['y'] += dxy
+                bed_rect = (furniture['bed']['x'], furniture['bed']['y'], furniture['bed']['width'], furniture['bed']['depth'])
+
+            if _min_edge_distance(bed_rect, wr_rect) < min_clear:
+                validation_issues.append("Could not reach 750mm clear between bed and wardrobe without leaving the inner boundary. Try reducing wardrobe width or enabling a tight aisle.")
+
 
 
         # Enclosure walls (optional): two return walls, each 600mm length, 120mm thick, full room height.
@@ -844,16 +996,18 @@ class BedroomEngine:
                         furniture[k]['y'] += dy
                 bed_data['y']=furniture['bed']['y']
 
-        # Walk-in wardrobe reserved zone: keep the bed group out of the wardrobe+aisle band
+        # Walk-in wardrobe reserved zone: NEVER push the anchored bed group off its wall.
+        # Instead, if the walk-in band intersects the bed zone, we surface a validation issue.
+        # The solver earlier will try different wardrobe walls / shrink widths; at this stage
+        # we do not mutate already-anchored bedroom elements.
         if wardrobe_is_walkin:
-            # Define a rectangular band in front of the wardrobe (wardrobe depth + aisle)
             if wardrobe_wall == 'bottom':
                 zone = (wardrobe_data['x'], 0, wardrobe_data['width'], walkin_band)
             elif wardrobe_wall == 'top':
                 zone = (wardrobe_data['x'], self.internal_depth - walkin_band, wardrobe_data['width'], walkin_band)
             elif wardrobe_wall == 'left':
                 zone = (0, wardrobe_data['y'], walkin_band, wardrobe_data['depth'])
-            else:  # right
+            else:
                 zone = (self.internal_width - walkin_band, wardrobe_data['y'], walkin_band, wardrobe_data['depth'])
 
             def _intersect(r1, r2):
@@ -862,40 +1016,9 @@ class BedroomEngine:
 
             bed_rect = (furniture['bed']['x'], furniture['bed']['y'], furniture['bed']['width'], furniture['bed']['depth'])
             if _intersect(bed_rect, zone):
-                # Try push the bed group away from the wardrobe wall (perpendicular shift)
-                push = 50
-                if wardrobe_wall == 'bottom':
-                    target_y = walkin_band + 750
-                    dy = max(0, target_y - furniture['bed']['y'])
-                    max_y = self.internal_depth - furniture['bed']['depth']
-                    dy = min(dy, max(0, max_y - furniture['bed']['y']))
-                    for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
-                        if k in furniture:
-                            furniture[k]['y'] += dy
-                elif wardrobe_wall == 'top':
-                    target_y = self.internal_depth - walkin_band - 750 - furniture['bed']['depth']
-                    dy = min(0, target_y - furniture['bed']['y'])
-                    min_y = 0
-                    dy = max(dy, min_y - furniture['bed']['y'])
-                    for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
-                        if k in furniture:
-                            furniture[k]['y'] += dy
-                elif wardrobe_wall == 'left':
-                    target_x = walkin_band + 750
-                    dx = max(0, target_x - furniture['bed']['x'])
-                    max_x = self.internal_width - furniture['bed']['width']
-                    dx = min(dx, max(0, max_x - furniture['bed']['x']))
-                    for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
-                        if k in furniture:
-                            furniture[k]['x'] += dx
-                else:  # right
-                    target_x = self.internal_width - walkin_band - 750 - furniture['bed']['width']
-                    dx = min(0, target_x - furniture['bed']['x'])
-                    min_x = 0
-                    dx = max(dx, min_x - furniture['bed']['x'])
-                    for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
-                        if k in furniture:
-                            furniture[k]['x'] += dx
+                validation_issues.append(
+                    "Walk-in closet aisle zone intersects the anchored bed zone. Try a different wardrobe wall, reduce wardrobe width, or allow a tight aisle (750mm)."
+                )
 
         # 8. TV UNIT - Place opposite to bed
         opposite_walls = {
@@ -1381,7 +1504,144 @@ class BedroomEngine:
         return fig
             
     def generate_3d_view(self, layout):
-        """Generate 3D view with proper orbit controls"""
+        """Generate 3D view.
+
+        - If Plotly is available, return a Plotly figure with true 360° orbit controls.
+        - Otherwise fall back to matplotlib.
+        """
+
+        # --- Plotly (preferred): true orbit + solid BIM-like wall masses ---
+        if go is not None:
+            ext_w = float(layout['room']['external_width'])
+            ext_d = float(layout['room']['external_depth'])
+            ext_t = float(layout['room']['external_wall_thickness'])
+            H = float(layout['room']['height'])
+
+            door = layout['architectural']['door']
+            window = layout['architectural']['window']
+            door_h = float(self.door_height)
+            win_sill = float(self.window_sill)
+            win_h = float(self.window_height)
+
+            fig = go.Figure()
+
+            def add_box(x, y, z, w, d, h, color, opacity=1.0, name=None):
+                # 8 vertices of the box
+                X = [x, x+w, x+w, x, x, x+w, x+w, x]
+                Y = [y, y, y+d, y+d, y, y, y+d, y+d]
+                Z = [z, z, z, z, z+h, z+h, z+h, z+h]
+                # 12 triangles (two per face)
+                I = [0, 0, 0, 1, 1, 2, 4, 4, 4, 5, 5, 6]
+                J = [1, 2, 3, 2, 5, 3, 5, 6, 7, 6, 1, 7]
+                K = [2, 3, 1, 5, 2, 6, 6, 7, 5, 1, 4, 3]
+                fig.add_trace(go.Mesh3d(
+                    x=X, y=Y, z=Z,
+                    i=I, j=J, k=K,
+                    color=color,
+                    opacity=opacity,
+                    flatshading=True,
+                    name=name or '',
+                    hoverinfo='skip',
+                    showscale=False,
+                ))
+
+            wall_color = '#9ca3af'
+
+            # Helper: split a wall run by an opening interval
+            def split_run(total_len, open_a, open_b):
+                segs=[]
+                if open_a > 0:
+                    segs.append((0, open_a))
+                if open_b < total_len:
+                    segs.append((open_b, total_len))
+                return segs
+
+            # --- External walls (as solid boxes), split by openings ---
+            # Bottom wall
+            if door['wall'] == 'bottom':
+                open_a = float(door['x'])
+                open_b = float(door['x'] + door['width'])
+                for a,b in split_run(ext_w, open_a, open_b):
+                    add_box(a, 0, 0, b-a, ext_t, H, wall_color, 1.0, 'wall')
+                # lintel above door
+                add_box(open_a, 0, door_h, open_b-open_a, ext_t, H-door_h, wall_color, 1.0, 'lintel')
+            else:
+                add_box(0, 0, 0, ext_w, ext_t, H, wall_color, 1.0, 'wall')
+
+            # Top wall
+            if door['wall'] == 'top':
+                open_a = float(door['x'])
+                open_b = float(door['x'] + door['width'])
+                for a,b in split_run(ext_w, open_a, open_b):
+                    add_box(a, ext_d-ext_t, 0, b-a, ext_t, H, wall_color, 1.0, 'wall')
+                add_box(open_a, ext_d-ext_t, door_h, open_b-open_a, ext_t, H-door_h, wall_color, 1.0, 'lintel')
+            else:
+                add_box(0, ext_d-ext_t, 0, ext_w, ext_t, H, wall_color, 1.0, 'wall')
+
+            # Left wall
+            if door['wall'] == 'left':
+                open_a = float(door['y'])
+                open_b = float(door['y'] + door['depth'])
+                for a,b in split_run(ext_d, open_a, open_b):
+                    add_box(0, a, 0, ext_t, b-a, H, wall_color, 1.0, 'wall')
+                add_box(0, open_a, door_h, ext_t, open_b-open_a, H-door_h, wall_color, 1.0, 'lintel')
+            else:
+                add_box(0, 0, 0, ext_t, ext_d, H, wall_color, 1.0, 'wall')
+
+            # Right wall
+            if door['wall'] == 'right':
+                open_a = float(door['y'])
+                open_b = float(door['y'] + door['depth'])
+                for a,b in split_run(ext_d, open_a, open_b):
+                    add_box(ext_w-ext_t, a, 0, ext_t, b-a, H, wall_color, 1.0, 'wall')
+                add_box(ext_w-ext_t, open_a, door_h, ext_t, open_b-open_a, H-door_h, wall_color, 1.0, 'lintel')
+            else:
+                add_box(ext_w-ext_t, 0, 0, ext_t, ext_d, H, wall_color, 1.0, 'wall')
+
+            # --- Window opening (sill + lintel) ---
+            # We represent the opening by *not* cutting the wall mass (Plotly boolean is heavy),
+            # but we do add explicit sill & lintel masses so it reads as BIM.
+            # A more detailed wall-splitting for windows can be added next.
+            win_wall = window['wall']
+            if win_wall in ('top','bottom'):
+                wx0 = float(window['x']); wx1 = float(window['x'] + window['width'])
+                wy = float(window['y']) if win_wall=='bottom' else float(window['y'])
+                # sill
+                add_box(wx0, (0 if win_wall=='bottom' else ext_d-ext_t), 0, wx1-wx0, ext_t, win_sill, wall_color, 1.0, 'sill')
+                # lintel
+                add_box(wx0, (0 if win_wall=='bottom' else ext_d-ext_t), win_sill+win_h, wx1-wx0, ext_t, max(0.0, H-(win_sill+win_h)), wall_color, 1.0, 'lintel')
+            else:
+                wy0 = float(window['y']); wy1 = float(window['y'] + window['depth'])
+                wx = float(window['x'])
+                add_box((0 if win_wall=='left' else ext_w-ext_t), wy0, 0, ext_t, wy1-wy0, win_sill, wall_color, 1.0, 'sill')
+                add_box((0 if win_wall=='left' else ext_w-ext_t), wy0, win_sill+win_h, ext_t, wy1-wy0, max(0.0, H-(win_sill+win_h)), wall_color, 1.0, 'lintel')
+
+            # Wardrobe enclosure return walls
+            for w in layout['walls'].get('wardrobe_enclosure', []):
+                add_box(float(w['x']), float(w['y']), 0, float(w['width']), float(w['depth']), H, '#d1d5db', 1.0, 'wardrobe_wall')
+
+            # Furniture masses (simple BIM blocks)
+            for name, item in layout['furniture'].items():
+                # TV panel + mirror are wall-mounted: use their mount_z if present
+                z0 = float(item.get('mount_z', 0.0))
+                h = float(item.get('height', 600.0))
+                add_box(float(item['x']), float(item['y']), z0, float(item['width']), float(item['depth']), h, '#e5e7eb', 1.0, name)
+
+            fig.update_layout(
+                margin=dict(l=0, r=0, t=0, b=0),
+                scene=dict(
+                    xaxis_title='X (mm)',
+                    yaxis_title='Y (mm)',
+                    zaxis_title='Z (mm)',
+                    aspectmode='data',
+                    dragmode='orbit',
+                    camera=dict(eye=dict(x=1.6, y=1.6, z=1.1)),
+                ),
+                showlegend=False,
+            )
+            return fig
+
+        # --- Matplotlib fallback ---
         fig = plt.figure(figsize=(16, 14))
         ax = fig.add_subplot(111, projection='3d')
         
