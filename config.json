@@ -1,0 +1,54 @@
+{
+  "app": {
+    "name": "Bedroom Layout Generator",
+    "version": "1.0.0",
+    "description": "Web tool for automatic bedroom layout generation"
+  },
+  "defaults": {
+    "room": {
+      "width": 3900,
+      "depth": 3600,
+      "height": 3000
+    },
+    "door": {
+      "from_wall": 200,
+      "width": 900,
+      "height": 2200,
+      "wall": "top",
+      "hinge": "left",
+      "swing": "inward",
+      "open_angle_deg": 45
+    },
+    "window": {
+      "width": 1800,
+      "sill_height": 300,
+      "height": 2200
+    },
+    "furniture": {
+      "bed": {
+        "queen": [
+          1600,
+          2000
+        ],
+        "double": [
+          1400,
+          1900
+        ],
+        "single": [
+          1200,
+          1900
+        ]
+      },
+      "wardrobe": {
+        "width": 1800,
+        "depth": 600,
+        "height": 2200
+      },
+      "tv_unit": {
+        "width": 1200,
+        "depth": 400,
+        "height": 500
+      }
+    }
+  }
+}

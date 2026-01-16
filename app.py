@@ -1,0 +1,542 @@
+# app.py - UPDATED SIDEBAR SECTION
+import streamlit as st
+import json
+import tempfile
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+from bedroom_engine import BedroomEngine
+from dxf_exporter import export_to_dxf
+
+# Page configuration
+st.set_page_config(
+    page_title="Professional Bedroom Designer",
+    page_icon="🏠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS (keep the same as before)
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.8rem;
+        background: linear-gradient(90deg, #1E3A8A, #3B82F6);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .feature-box {
+        background: linear-gradient(135deg, #F0F9FF 0%, #E0F2FE 100%);
+        padding: 1.5rem;
+        border-radius: 1rem;
+        border: 2px solid #BAE6FD;
+        margin: 1rem 0;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .boq-table {
+        background: white;
+        border-radius: 0.5rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        overflow: hidden;
+    }
+    .total-cost {
+        background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        font-size: 1.2rem;
+        font-weight: bold;
+        text-align: center;
+    }
+    .stButton>button {
+        width: 100%;
+        font-weight: bold;
+        font-size: 1.1rem;
+        padding: 1rem;
+        border-radius: 0.75rem;
+        background: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%);
+        border: none;
+        color: white;
+        transition: all 0.3s;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(59, 130, 246, 0.3);
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Title
+st.markdown('<h1 class="main-header">🏠 Professional Bedroom Design System</h1>', unsafe_allow_html=True)
+
+# Feature highlights (keep the same)
+st.markdown("""
+<div class="feature-box">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
+        <div>
+            <strong>🎯 SMART DESIGN FEATURES:</strong><br>
+            • TV size calculated automatically<br>
+            • Optimal viewing distance<br>
+            • Unique IDs for all items<br>
+            • Auto BOQ generation<br>
+            • Collision detection
+        </div>
+        <div>
+            <strong>🏗️ COMPLETE SYSTEMS:</strong><br>
+            • Electrical sockets layout<br>
+            • Lighting design<br>
+            • AC placement<br>
+            • DXF export<br>
+            • 3D visualization
+        </div>
+        <div>
+            <strong>📊 PROFESSIONAL OUTPUTS:</strong><br>
+            • Bill of Quantities (BOQ)<br>
+            • Cost estimation<br>
+            • Material specifications<br>
+            • Professional drawings<br>
+            • All IDs tracked
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Sidebar - UPDATED
+with st.sidebar:
+    st.markdown("### ⚙️ Input Method")
+    
+    input_method = st.radio("Choose input method:", 
+                           ["Manual Parameters", "Upload DXF (Coming Soon)"], 
+                           index=0)
+    
+    if "Upload DXF" in input_method:
+        st.warning("DXF upload feature is under development. Using manual parameters.")
+        input_method = "Manual Parameters"
+    
+    st.markdown("---")
+    
+    if input_method == "Manual Parameters":
+        st.markdown("### 📐 Room Dimensions")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            width = st.number_input("Width (mm) - Internal", 2000, 10000, 3900, 100)
+        with col2:
+            depth = st.number_input("Depth (mm) - Internal", 2000, 10000, 3600, 100)
+        
+        height = st.number_input("Height (mm)", 2400, 5000, 3000, 100)
+        
+        # --- Doors & Windows (categorized) ---
+        with st.expander("🚪 Doors", expanded=True):
+            door_wall = st.selectbox("Door Wall", ["top", "bottom", "left", "right"], index=0)
+            door_from_wall = st.number_input("Door offset from corner (mm)", 0, int(max(0, min(width, depth) - 600)), 200, 50)
+            door_width = st.number_input("Door Width (mm)", 600, 1200, 900, 50)
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                door_hinge = st.selectbox("Hinge Side", ["left", "right"], index=0)
+            with col_d2:
+                door_swing = st.selectbox("Swing", ["inward", "outward"], index=0)
+
+        with st.expander("🪟 Windows", expanded=True):
+            window_wall = st.selectbox("Window Wall", ["right", "left", "bottom", "top"], index=0)
+            window_width = st.number_input("Window Width (mm)", 800, 3000, 1800, 100)
+            window_sill = st.number_input("Window Sill (mm)", 200, 1200, 300, 50)
+
+        st.markdown("### 🛏️ Bed Configuration")
+        
+        bed_type = st.selectbox("Bed Size", 
+                               ["King (1800x2000)", "Queen (1600x2000)", 
+                                "Double (1400x1900)", "Single (1200x1900)"])
+        
+        # New bed configuration options
+        bedside_table_count = st.slider("Bedside Tables", 0, 2, 2)
+        include_banquet = st.checkbox("Include Banquet", True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            headboard_width = st.number_input("Headboard Width (mm)", 1200, 2200, 1600, 50)
+        with col2:
+            headboard_height = st.number_input("Headboard Height (mm)", 800, 1500, 1000, 50)
+        
+        st.markdown("**Bedside Tables:**")
+        col1, col2 = st.columns(2)
+        with col1:
+            bedside_width = st.number_input("Width (mm)", 300, 800, 500, 50)
+        with col2:
+            bedside_depth = st.number_input("Depth (mm)", 300, 600, 400, 50)
+        
+        st.markdown("### 🗄️ Storage & Furniture")
+        wardrobe_type_label = st.selectbox("Wardrobe Type", [
+            "Auto",
+            "Free sides (Straight)",
+            "Enclosed (Straight niche)",
+            "Walk-in L-shape",
+            "Walk-in U-shape"
+        ], index=0)
+
+        wardrobe_mode_map = {
+            "Auto": "auto",
+            "Free sides (Straight)": "free",
+            "Enclosed (Straight niche)": "enclosed",
+            "Walk-in L-shape": "walkin_l",
+            "Walk-in U-shape": "walkin_u"
+        }
+        wardrobe_mode = wardrobe_mode_map[wardrobe_type_label]
+
+        
+        wardrobe_width = st.number_input("Wardrobe Width (mm)", 1200, 4000, 1800, 100)
+        tv_unit_width = st.number_input("TV Unit Width (mm)", 800, 2000, 1200, 100)
+        dressing_table_width = st.number_input("Dressing Table Width (mm)", 800, 2000, 1200, 100)
+        
+        dressing_table_side = st.radio("Dressing Table Side", 
+                                      ["Right of TV", "Left of TV"])
+        
+        if include_banquet:
+            st.markdown("**Banquet:**")
+            col1, col2 = st.columns(2)
+            with col1:
+                banquet_width = st.number_input("Width (mm)", 1000, 2000, 1400, 50)
+            with col2:
+                banquet_depth = st.number_input("Depth (mm)", 300, 800, 500, 50)
+        
+        internal_wall_gap = st.number_input("Internal Wall Gap (mm)", 100, 500, 200, 50)
+        
+        st.markdown("### ⚡ Systems")
+        
+        include_electrical = st.checkbox("Include Electrical", True)
+        include_lighting = st.checkbox("Include Lighting", True)
+        include_ac = st.checkbox("Include AC", True)
+        
+        ac_type = "split"  # Default value
+        lighting_type = "recessed"  # Default value
+        
+        if include_ac:
+            ac_type = st.selectbox("AC Type", ["split", "concealed"])
+        
+        if include_lighting:
+            lighting_type = st.selectbox("Lighting Type", ["recessed", "pendant", "track"])
+        
+        st.markdown("---")
+        
+        # Generate button
+        generate_btn = st.button("🚀 GENERATE COMPLETE DESIGN", 
+                               type="primary", 
+                               use_container_width=True)
+
+# Main content (keep the same tabs structure)
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📐 Design", "🏗️ 3D View", "📊 BOQ", "⚡ Systems", "📤 Export"])
+
+# Session state
+if 'layout' not in st.session_state:
+    st.session_state.layout = None
+if 'engine' not in st.session_state:
+    st.session_state.engine = None
+
+if generate_btn or st.session_state.layout:
+    if generate_btn:
+        # Parse inputs
+        bed_sizes = {
+            "King (1800x2000)": "king",
+            "Queen (1600x2000)": "queen",
+            "Double (1400x1900)": "double",
+            "Single (1200x1900)": "single"
+        }
+        
+        bed_type_val = bed_sizes[bed_type]
+        dt_side = "right" if dressing_table_side == "Right of TV" else "left"
+        
+        try:
+            with st.spinner("🔄 Generating complete design with BOQ..."):
+                engine = BedroomEngine(
+                    width=width,
+                    depth=depth,
+                    height=height,
+                    door_from_wall=door_from_wall,
+                    door_width=door_width,
+                    door_wall=door_wall,
+                    door_hinge=door_hinge,
+                    door_swing=door_swing,
+                    door_open_angle_deg=45,
+                    window_wall=window_wall,
+                    window_width=window_width,
+                    window_sill=window_sill,
+                    internal_wall_gap=internal_wall_gap,
+                    bed_type=bed_type_val,
+                    wardrobe_mode=wardrobe_mode,
+                    wardrobe_width=wardrobe_width,
+                    tv_unit_width=tv_unit_width,
+                    dressing_table_width=dressing_table_width,
+                    bedside_table_count=bedside_table_count,
+                    bedside_table_width=bedside_width,
+                    bedside_table_depth=bedside_depth,
+                    headboard_width=headboard_width,
+                    headboard_height=headboard_height,
+                    include_banquet=include_banquet,
+                    banquet_width=banquet_width if include_banquet else 1400,
+                    banquet_depth=banquet_depth if include_banquet else 500,
+                    ac_type=ac_type,
+                    lighting_type=lighting_type,
+                    include_electrical=include_electrical,
+                    include_lighting=include_lighting,
+                    include_ac=include_ac
+                )
+                
+                layout = engine.calculate_layout(dressing_table_side=dt_side)
+                st.session_state.layout = layout
+                st.session_state.engine = engine
+                
+                st.success(f"✅ Design generated! Room ID: {layout['room']['id']}")
+                
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
+            st.stop()
+    
+    # Tab 1: Design
+    with tab1:
+        st.markdown("### 📐 2D Floor Plan")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            fig = st.session_state.engine.create_visualization(st.session_state.layout)
+            st.pyplot(fig)
+        
+        with col2:
+            st.markdown("### 📊 Design Info")
+            
+            metadata = st.session_state.layout['metadata']
+            room = st.session_state.layout['room']
+            
+            st.metric("Room Area", f"{room['area_m2']:.2f} m²")
+            st.metric("TV Size", f"{metadata['tv_size']}\"")
+            st.metric("Viewing Distance", f"{int(metadata['viewing_distance'])}mm")
+            
+            st.markdown("**Dimensions:**")
+            st.write(f"Internal: {room['internal_width']} x {room['internal_depth']} mm")
+            st.write(f"External: {room['external_width']} x {room['external_depth']} mm")
+            
+            st.markdown("**Design Features:**")
+            st.write(f"• Bed on {st.session_state.layout['architectural']['bed_wall']['type']} wall")
+            st.write(f"• Window on {metadata['window_wall']} wall")
+            st.write(f"• Wardrobe mode: {metadata.get('wardrobe_mode','').replace('_',' ').title()}")
+            st.write(f"• Bedside tables: {metadata['bedside_table_count']}")
+            st.write(f"• Banquet included: {'Yes' if metadata['include_banquet'] else 'No'}")
+            
+            if metadata['validation_issues']:
+                with st.expander("⚠️ Issues", expanded=True):
+                    for issue in metadata['validation_issues']:
+                        st.warning(issue)
+    
+    # Tab 2: 3D View
+    with tab2:
+        st.markdown("### 🏗️ 3D Visualization")
+        
+        fig_3d = st.session_state.engine.generate_3d_view(st.session_state.layout)
+        st.pyplot(fig_3d)
+        
+        st.info("Use mouse to rotate 3D view. Left drag: rotate, Right drag: zoom, Middle drag: pan")
+    
+    # Tab 3: BOQ
+    with tab3:
+        st.markdown("### 💰 Bill of Quantities (BOQ)")
+        
+        boq = st.session_state.layout['boq']
+        
+        # Display BOQ table
+        boq_df = pd.DataFrame(boq['items'])
+        
+        st.markdown('<div class="boq-table">', unsafe_allow_html=True)
+        st.dataframe(boq_df, use_container_width=True, height=400)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Total cost
+        st.markdown(f'<div class="total-cost">TOTAL PROJECT COST: ${boq["total_cost"]:,.2f} {boq["currency"]}</div>', 
+                   unsafe_allow_html=True)
+        
+        # Category breakdown
+        st.markdown("### 📊 Cost Breakdown by Category")
+        
+        category_totals = {}
+        for item in boq['items']:
+            cat = item['category']
+            category_totals[cat] = category_totals.get(cat, 0) + item['total_cost']
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # Pie chart
+            fig_pie, ax = plt.subplots(figsize=(8, 6))
+            ax.pie(category_totals.values(), labels=category_totals.keys(), autopct='%1.1f%%',
+                  startangle=90, colors=['#3b82f6', '#10b981', '#f59e0b', '#ef4444'])
+            ax.set_title('Cost Distribution by Category')
+            st.pyplot(fig_pie)
+        
+        with col2:
+            st.markdown("**Category Totals:**")
+            for cat, total in sorted(category_totals.items(), key=lambda x: x[1], reverse=True):
+                st.metric(cat, f"${total:,.2f}")
+    
+    # Tab 4: Systems
+    with tab4:
+        st.markdown("### ⚡ Systems Design")
+        
+        systems = st.session_state.layout['systems']
+        
+        # Electrical Systems
+        st.markdown("#### 🔌 Electrical Layout")
+        
+        if systems['electrical']:
+            elec_df = pd.DataFrame(systems['electrical'])
+            st.dataframe(elec_df, use_container_width=True)
+            
+            total_sockets = sum(s['quantity'] for s in systems['electrical'])
+            st.info(f"Total Sockets: {total_sockets}")
+        else:
+            st.warning("No electrical systems included")
+        
+        st.markdown("---")
+        
+        # Lighting Systems
+        st.markdown("#### 💡 Lighting Design")
+        
+        if systems['lighting']:
+            light_df = pd.DataFrame(systems['lighting'])
+            st.dataframe(light_df, use_container_width=True)
+            
+            total_lights = len(systems['lighting'])
+            total_wattage = sum(l['wattage'] for l in systems['lighting'])
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Lights", total_lights)
+            with col2:
+                st.metric("Total Load", f"{total_wattage}W")
+        else:
+            st.warning("No lighting systems included")
+        
+        st.markdown("---")
+        
+        # AC Systems
+        st.markdown("#### ❄️ Air Conditioning")
+        
+        if systems['ac']:
+            for ac in systems['ac']:
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Type", ac['type'].title())
+                with col2:
+                    st.metric("Capacity", f"{ac['capacity_hp']} HP")
+                with col3:
+                    st.metric("BTU", f"{ac['capacity_btu']:,}")
+                
+                st.success(f"✅ AC System: {ac['id']} - {ac['type'].title()} {ac['capacity_hp']} HP ({ac['capacity_btu']} BTU)")
+        else:
+            st.warning("No AC system included")
+    
+    # Tab 5: Export
+    with tab5:
+        st.markdown("### 📤 Export Options")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 📄 DXF Export")
+            st.info("Export your design to AutoCAD-compatible DXF format for professional use")
+            
+            if st.button("🔽 Generate DXF File", type="primary", use_container_width=True):
+                with st.spinner("Generating DXF..."):
+                    try:
+                        dxf_path = export_to_dxf(st.session_state.layout)
+                        
+                        # Read DXF file
+                        with open(dxf_path, 'rb') as f:
+                            dxf_data = f.read()
+                        
+                        # Provide download button
+                        st.download_button(
+                            label="📥 Download DXF",
+                            data=dxf_data,
+                            file_name=f"bedroom_layout_{st.session_state.layout['room']['id']}.dxf",
+                            mime="application/dxf",
+                            use_container_width=True
+                        )
+                        
+                        st.success("✅ DXF file generated successfully!")
+                        
+                    except Exception as e:
+                        st.error(f"Error generating DXF: {str(e)}")
+        
+        with col2:
+            st.markdown("#### 📊 JSON Export")
+            st.info("Export complete layout data as JSON for further processing")
+            
+            if st.button("🔽 Generate JSON File", type="primary", use_container_width=True):
+                try:
+                    json_data = json.dumps(st.session_state.layout, indent=2)
+                    
+                    st.download_button(
+                        label="📥 Download JSON",
+                        data=json_data,
+                        file_name=f"bedroom_layout_{st.session_state.layout['room']['id']}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                    
+                    st.success("✅ JSON file ready for download!")
+                    
+                except Exception as e:
+                    st.error(f"Error generating JSON: {str(e)}")
+        
+        st.markdown("---")
+        
+        st.markdown("#### 📋 Layout Summary")
+        
+        metadata = st.session_state.layout['metadata']
+        
+        summary = f"""
+        **Project ID:** {metadata['room_id']}
+        **Generated:** {metadata['generated_at']}
+        
+        **Room Configuration:**
+        - Internal Dimensions: {st.session_state.layout['room']['internal_width']} x {st.session_state.layout['room']['internal_depth']} mm
+        - External Dimensions: {st.session_state.layout['room']['external_width']} x {st.session_state.layout['room']['external_depth']} mm
+        - Height: {st.session_state.layout['room']['height']} mm
+        - Area: {st.session_state.layout['room']['area_m2']} m²
+        
+        **Design Details:**
+        - TV Size: {metadata['tv_size']}"
+        - Viewing Distance: {int(metadata['viewing_distance'])} mm
+        - Bed Wall: {metadata['bed_wall'].title()}
+        - Wardrobe Wall: {metadata['wardrobe_wall'].title()}
+        - Window Wall: {metadata['window_wall'].title()}
+        - Door Wall: {metadata['door_wall'].title()}
+        - Bedside Tables: {metadata['bedside_table_count']}
+        - Banquet Included: {'Yes' if metadata['include_banquet'] else 'No'}
+        
+        **BOQ Total:** ${st.session_state.layout['boq']['total_cost']:,.2f}
+        """
+        
+        st.markdown(summary)
+        
+        if metadata['validation_issues']:
+            st.warning("⚠️ Validation Issues:")
+            for issue in metadata['validation_issues']:
+                st.write(f"- {issue}")
+
+else:
+    # Welcome screen (keep the same)
+    pass
+
+# Footer (keep the same)
+st.markdown("---")
+st.markdown("""
+<div style="text-align: center; color: #666; font-size: 0.9rem; padding: 1rem;">
+    <p>🏠 <strong>Professional Bedroom Design System</strong> | Complete BOQ | TV Size Optimization | Systems Design | DXF Export</p>
+    <p>📊 <strong>All Requirements Implemented:</strong> TV sizing, Viewing distance, Unique IDs, BOQ, Systems, DXF, 3D</p>
+    <p>💡 <strong>How to use:</strong> Set parameters → Generate → Check BOQ → Export DXF → Share with team</p>
+</div>
+""", unsafe_allow_html=True)

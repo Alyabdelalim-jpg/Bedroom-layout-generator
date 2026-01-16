@@ -1,0 +1,1548 @@
+# bedroom_engine.py - COMPLETE REWRITE WITH CONSTRAINT SOLVER
+import json
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import numpy as np
+from datetime import datetime
+import matplotlib
+matplotlib.use('Agg')
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import uuid
+from typing import Tuple, Optional
+
+try:
+    import plotly.graph_objects as go
+except Exception:
+    # Plotly is optional; Streamlit app will fall back if not installed.
+    go = None
+
+class BedroomEngine:
+    def __init__(self, 
+                 width=3900, 
+                 depth=3600, 
+                 height=3000,
+                 door_from_wall=200,
+                 door_width=900,
+                 door_wall='top',
+                 door_hinge='left',
+                 door_swing='inward',
+                 door_open_angle_deg=0,
+                 window_wall='right',
+                 window_width=1800,
+                 window_sill=300,
+                 internal_wall_gap=200,
+                 bed_type='queen',
+                 wardrobe_mode='auto',
+                 wardrobe_width=1800,
+                 tv_unit_width=1200,
+                 dressing_table_width=1200,
+                 bedside_table_count=2,
+                 bedside_table_width=500,
+                 bedside_table_depth=400,
+                 headboard_width=1600,
+                 headboard_height=1000,
+                 include_banquet=True,
+                 banquet_width=1400,
+                 banquet_depth=500,
+                 ac_type='split',
+                 lighting_type='recessed',
+                 include_electrical=True,
+                 include_lighting=True,
+                 include_ac=True):
+        
+        # Generate unique ID for this room
+        self.room_id = str(uuid.uuid4())[:8]
+        
+        # Room dimensions (INTERNAL dimensions provided by user)
+        self.internal_width = width
+        self.internal_depth = depth
+        self.height = height
+        
+        # Wall thicknesses
+        self.external_wall_thickness = 250
+        self.internal_wall_thickness = 120
+        
+        # Calculate external dimensions
+        self.external_width = width + 2 * self.external_wall_thickness
+        self.external_depth = depth + 2 * self.external_wall_thickness
+        
+        # Door settings
+        self.door_from_wall = door_from_wall
+        self.door_width = door_width
+        self.door_wall = door_wall
+        self.door_hinge = door_hinge
+        self.door_swing = door_swing
+        self.door_open_angle_deg = door_open_angle_deg
+        self.door_height = 2200
+        
+        # Window settings
+        self.window_wall = window_wall
+        self.window_width = window_width
+        self.window_sill = window_sill
+        self.window_height = 2200
+        
+        # Internal wall
+        self.internal_wall_gap = internal_wall_gap
+        self.internal_wall_depth = 600
+        
+        # Furniture configuration
+        self.bedside_table_count = min(bedside_table_count, 2)
+        self.include_banquet = include_banquet
+        # Wardrobe mode: free / enclosed / walkin_l / walkin_u / auto
+        self.wardrobe_mode = wardrobe_mode
+        
+        # Systems
+        self.ac_type = ac_type
+        self.lighting_type = lighting_type
+        self.include_electrical = include_electrical
+        self.include_lighting = include_lighting
+        self.include_ac = include_ac
+        
+        # Furniture dimensions based on bed type
+        bed_sizes = {
+            'single': {'width': 1200, 'depth': 1900},
+            'double': {'width': 1400, 'depth': 1900},
+            'queen': {'width': 1600, 'depth': 2000},
+            'king': {'width': 1800, 'depth': 2000}
+        }
+        
+        bed_size = bed_sizes[bed_type]
+        
+        # Store furniture specs
+        self.bed_width = bed_size['width']
+        self.bed_depth = bed_size['depth']
+        self.wardrobe_width = wardrobe_width
+        self.tv_unit_width = tv_unit_width
+        self.dressing_table_width = dressing_table_width
+        self.bedside_table_width = bedside_table_width
+        self.bedside_table_depth = bedside_table_depth
+        self.headboard_width = headboard_width
+        self.headboard_height = headboard_height
+        self.banquet_width = banquet_width
+        self.banquet_depth = banquet_depth
+        
+        # Furniture with unique IDs
+        self.furniture_specs = {
+            'bed': {'id': f'FUR-{self.room_id}-001', 'width': bed_size['width'], 'depth': bed_size['depth'], 'height': 500, 'material': 'Upholstered', 'unit_cost': 1500},
+            'headboard': {'id': f'FUR-{self.room_id}-002', 'width': headboard_width, 'depth': 50, 'height': headboard_height, 'material': 'Fabric', 'unit_cost': 300},
+            'wardrobe': {'id': f'FUR-{self.room_id}-003', 'width': wardrobe_width, 'depth': 600, 'height': 2200, 'material': 'Engineered Wood', 'unit_cost': 800},
+            'tv_unit': {'id': f'FUR-{self.room_id}-004', 'width': tv_unit_width, 'depth': 400, 'height': 500, 'material': 'MDF', 'unit_cost': 400},
+            'dressing_table': {'id': f'FUR-{self.room_id}-005', 'width': dressing_table_width, 'depth': 450, 'height': 800, 'material': 'Engineered Wood', 'unit_cost': 350},
+            'dressing_chair': {'id': f'FUR-{self.room_id}-006', 'width': 600, 'depth': 500, 'height': 450, 'material': 'Fabric', 'unit_cost': 250},
+            'bedside_table_left': {'id': f'FUR-{self.room_id}-007', 'width': bedside_table_width, 'depth': bedside_table_depth, 'height': 600, 'material': 'Wood', 'unit_cost': 150},
+            'bedside_table_right': {'id': f'FUR-{self.room_id}-008', 'width': bedside_table_width, 'depth': bedside_table_depth, 'height': 600, 'material': 'Wood', 'unit_cost': 150},
+        }
+        
+        if include_banquet:
+            self.furniture_specs['banquet'] = {'id': f'FUR-{self.room_id}-009', 'width': banquet_width, 'depth': banquet_depth, 'height': 400, 'material': 'Upholstered', 'unit_cost': 200}
+        
+        # Calculate optimal TV size
+        self.tv_size = self.calculate_tv_size()
+        
+        # Clearance requirements
+        self.clearances = {
+            'bed_sides': 600,
+            'bed_foot': 900,
+            'wardrobe_doors': 900,
+            'door_swing': 450,
+            'circulation': 900,
+            'window_clearance': 500,
+            'furniture_gap': 100,
+            'bedside_table_gap': 50,
+            'tv_viewing_distance': self.tv_size * 25,
+            'min_wall_clearance': 50,
+            'wardrobe_niche_clearance': 200,  # 200mm clearance from openings
+        }
+        
+        # Track placed furniture for collision detection
+        self.placed_furniture = []
+    
+    def calculate_tv_size(self):
+        """Calculate optimal TV size based on room dimensions"""
+        room_area = (self.internal_width * self.internal_depth) / 1000000
+        
+        if room_area < 12:
+            return 32
+        elif room_area < 15:
+            return 43
+        elif room_area < 20:
+            return 55
+        else:
+            return 65
+    
+    def calculate_ac_capacity(self):
+        """Calculate AC capacity based on room area/10"""
+        room_area_m2 = (self.internal_width * self.internal_depth) / 1000000
+        hp_needed = room_area_m2 / 10
+        
+        standard_hp = [1.5, 2.25, 3, 4, 5]
+        
+        for hp in standard_hp:
+            if hp >= hp_needed:
+                return hp
+        
+        return 5
+    
+    def get_wall_info(self, wall_name):
+        """Get wall information including available length and position"""
+        ext_wall = self.external_wall_thickness
+        
+        walls = {
+            'top': {
+                'name': 'top',
+                'start': (ext_wall, self.external_depth - ext_wall),
+                'end': (ext_wall + self.internal_width, self.external_depth - ext_wall),
+                'length': self.internal_width,
+                'direction': 'horizontal'
+            },
+            'bottom': {
+                'name': 'bottom',
+                'start': (ext_wall, ext_wall),
+                'end': (ext_wall + self.internal_width, ext_wall),
+                'length': self.internal_width,
+                'direction': 'horizontal'
+            },
+            'left': {
+                'name': 'left',
+                'start': (ext_wall, ext_wall),
+                'end': (ext_wall, ext_wall + self.internal_depth),
+                'length': self.internal_depth,
+                'direction': 'vertical'
+            },
+            'right': {
+                'name': 'right',
+                'start': (ext_wall + self.internal_width, ext_wall),
+                'end': (ext_wall + self.internal_width, ext_wall + self.internal_depth),
+                'length': self.internal_depth,
+                'direction': 'vertical'
+            }
+        }
+        
+        return walls.get(wall_name)
+    
+    def check_collision(self, x, y, width, depth, clearance=0):
+        """Check if placement collides with existing furniture"""
+        for placed in self.placed_furniture:
+            # Add clearance buffer
+            px, py, pw, pd = placed['x'], placed['y'], placed['width'], placed['depth']
+            
+            # Check overlap with buffer
+            if not (x + width + clearance < px or 
+                    x > px + pw + clearance or 
+                    y + depth + clearance < py or 
+                    y > py + pd + clearance):
+                return True
+        
+        return False
+    
+    def is_wall_available(self, wall_name, required_length, check_openings=True):
+        """Check if wall has enough space and no openings"""
+        wall = self.get_wall_info(wall_name)
+        
+        if wall['length'] < required_length:
+            return False
+        
+        if check_openings:
+            # Check if door is on this wall
+            if self.door_wall == wall_name:
+                return False
+            
+            # Check if window is on this wall
+            if self.window_wall == wall_name:
+                return False
+        
+        return True
+    
+    def place_on_wall(self, wall_name, width, depth, offset_from_start=None, center=False):
+        """Place an axis-aligned rectangle on a wall.
+
+        Conventions:
+        - `width` is the dimension ALONG the wall.
+        - `depth` is the dimension PERPENDICULAR into the room.
+
+        This avoids the classic vertical-wall swap bug that caused wardrobes to overlap beds/doors.
+        """
+        wall = self.get_wall_info(wall_name)
+
+        if wall['direction'] == 'horizontal':
+            # Along wall is X
+            if center:
+                x = wall['start'][0] + (wall['length'] - width) / 2
+            elif offset_from_start is not None:
+                x = wall['start'][0] + offset_from_start
+            else:
+                x = wall['start'][0]
+
+            # Perpendicular is Y
+            if wall_name == 'top':
+                y = wall['start'][1] - depth
+            else:  # bottom
+                y = wall['start'][1]
+
+        else:
+            # Along wall is Y
+            if center:
+                y = wall['start'][1] + (wall['length'] - width) / 2
+            elif offset_from_start is not None:
+                y = wall['start'][1] + offset_from_start
+            else:
+                y = wall['start'][1]
+
+            # Perpendicular is X
+            if wall_name == 'right':
+                x = wall['start'][0] - depth
+            else:  # left
+                x = wall['start'][0]
+
+        return x, y
+
+    def place_item_on_wall(
+        self,
+        wall_name: str,
+        along: float,
+        into: float,
+        offset_from_start: Optional[float] = None,
+        center: bool = False,
+    ) -> Tuple[float, float, float, float]:
+        """Place an item on a wall and return axis-aligned rect (x,y,width,depth).
+
+        - along: dimension ALONG the wall.
+        - into:  dimension PERPENDICULAR into the room.
+
+        Important: Layout rectangles are always axis-aligned in global XY, so for
+        vertical walls we must SWAP the stored (width, depth) to (into, along).
+        """
+        x, y = self.place_on_wall(
+            wall_name,
+            width=along,
+            depth=into,
+            offset_from_start=offset_from_start,
+            center=center,
+        )
+
+        wall = self.get_wall_info(wall_name)
+        if wall["direction"] == "horizontal":
+            return x, y, along, into
+        return x, y, into, along
+    
+    def find_best_bed_wall(self):
+        """
+        Find the best wall for bed placement using topology rules:
+        1. Avoid window wall
+        2. Avoid door wall
+        3. Prefer longer wall
+        4. Must fit bed + bedside tables if needed
+        """
+        candidate_walls = []
+        
+        # Calculate required width for bed setup
+        required_width = self.bed_width
+        if self.bedside_table_count > 0:
+            required_width += self.bedside_table_width * self.bedside_table_count + 100
+        
+        for wall_name in ['top', 'bottom', 'left', 'right']:
+            # Skip walls with openings
+            if wall_name == self.door_wall or wall_name == self.window_wall:
+                continue
+            
+            wall = self.get_wall_info(wall_name)
+            
+            # Check if bed fits
+            if wall['length'] >= required_width:
+                # Prefer longer walls
+                score = wall['length']
+                candidate_walls.append((wall_name, score))
+        
+        if not candidate_walls:
+            raise Exception("No suitable wall for bed placement")
+        
+        # Sort by score (prefer longer walls)
+        candidate_walls.sort(key=lambda x: x[1], reverse=True)
+        
+        return candidate_walls[0][0]
+
+    def _opening_intervals_on_wall(self, wall_name):
+        """Return list of forbidden intervals (start,end) along a wall due to openings + buffer.
+        Units: mm along the wall axis measured from wall start.
+        """
+        buf = self.clearances.get('wardrobe_niche_clearance', 200)
+        intervals=[]
+
+        # Door interval
+        if self.door_wall == wall_name:
+            a = max(0, self.door_from_wall - buf)
+            b = self.door_from_wall + self.door_width + buf
+            intervals.append((a,b))
+
+        # Window interval (treat as keep-clear too if ever used)
+        if self.window_wall == wall_name:
+            # centered window
+            wall = self.get_wall_info(wall_name)
+            win_start = (wall['length'] - self.window_width)/2
+            a = max(0, win_start - buf)
+            b = win_start + self.window_width + buf
+            intervals.append((a,b))
+
+        # Merge overlaps
+        if not intervals:
+            return []
+        intervals.sort()
+        merged=[intervals[0]]
+        for a,b in intervals[1:]:
+            la,lb=merged[-1]
+            if a<=lb:
+                merged[-1]=(la,max(lb,b))
+            else:
+                merged.append((a,b))
+        return merged
+
+    def _largest_free_segment(self, wall_name, required_length):
+        """Pick a placement segment along wall that avoids openings; returns offset_from_start or None.
+        Strategy: choose the largest free segment that can host required_length, and center within it.
+        """
+        wall=self.get_wall_info(wall_name)
+        intervals=self._opening_intervals_on_wall(wall_name)
+        # Compute free segments
+        free=[]
+        cur=0
+        for a,b in intervals:
+            if a-cur>0:
+                free.append((cur,a))
+            cur=max(cur,b)
+        if wall['length']-cur>0:
+            free.append((cur,wall['length']))
+
+        # Filter by size
+        candidates=[seg for seg in free if (seg[1]-seg[0])>=required_length]
+        if not candidates:
+            return None
+        # Largest then earliest
+        candidates.sort(key=lambda s:(s[1]-s[0],-s[0]), reverse=True)
+        a,b=candidates[0]
+        return a + (b-a-required_length)/2
+
+    def _rect_distance(self, r1, r2):
+        """Axis-aligned min distance between rectangles (0 if intersect).
+        Each rect: (x,y,w,d).
+        """
+        x1,y1,w1,d1=r1
+        x2,y2,w2,d2=r2
+        dx=max(x2-(x1+w1), x1-(x2+w2), 0)
+        dy=max(y2-(y1+d1), y1-(y2+d2), 0)
+        return (dx**2+dy**2)**0.5
+
+    def _recommended_tv_center_z(self) -> float:
+        """Simple mounting rule-of-thumb.
+
+        TV center close to seated eye level (~1050mm), adjusted slightly with viewing distance.
+        Clamped to a conservative range so it never floats near the ceiling.
+        """
+        vd = float(self.clearances.get('tv_viewing_distance', 2000))
+        # Baseline: 1050mm at ~2m; add 25mm per extra 500mm viewing distance
+        center = 1050.0 + 25.0 * max(0.0, (vd - 2000.0) / 500.0)
+        return float(max(950.0, min(1200.0, center)))
+
+    def resolve_wardrobe_mode(self):
+        """Resolve wardrobe mode from user choice and room size thresholds.
+
+        Modes: 'free', 'enclosed', 'walkin_l', 'walkin_u', 'auto'.
+        Auto rules (user confirmed):
+          - U-shape if both dimensions >= 5200mm
+          - L-shape if max dimension >= 4500mm
+          - Else enclosed straight
+        """
+        mode = (self.wardrobe_mode or 'auto').lower().strip()
+        if mode in ('free', 'enclosed', 'walkin_l', 'walkin_u'):
+            return mode
+        w, d = self.internal_width, self.internal_depth
+        if w >= 5200 and d >= 5200:
+            return 'walkin_u'
+        if max(w, d) >= 4500:
+            return 'walkin_l'
+        return 'enclosed'
+
+    def _walkin_aisle_depth(self, prefer=900, tight=750):
+        """Return aisle depth for walk-in closets.
+
+        Default 900mm. If room is tight (bed+group cannot fit), use 750mm.
+        """
+        # Heuristic: if clear depth after bed and tv zone is too small, drop to tight.
+        # We keep it simple: if min(internal_width, internal_depth) < 3600, consider tight.
+        if min(self.internal_width, self.internal_depth) < 3600:
+            return tight
+        return prefer
+
+    
+    def find_best_wardrobe_wall(self, bed_wall):
+        """
+        Find best wall for wardrobe using topology rules:
+        1. Must not face bed directly
+        2. Must not be on window wall
+        3. Must not be on door wall (if possible)
+        4. Must have space for built-in niche (600mm depth)
+        5. Must have 200mm clearance from openings
+        """
+        candidate_walls = []
+        
+        # Opposite walls
+        opposite = {
+            'top': 'bottom',
+            'bottom': 'top',
+            'left': 'right',
+            'right': 'left'
+        }
+        
+        bed_opposite = opposite[bed_wall]
+        
+        for wall_name in ['top', 'bottom', 'left', 'right']:
+            # Rule 1: Don't face bed
+            if wall_name == bed_opposite:
+                continue
+            
+            # Rule 2: Not on window wall
+            if wall_name == self.window_wall:
+                continue
+            
+            # Check if wall has enough length
+            wall = self.get_wall_info(wall_name)
+            required_length = self.wardrobe_width + 2 * self.clearances['wardrobe_niche_clearance']
+            
+            if wall['length'] >= required_length:
+                # Strongly avoid the door wall for wardrobe placement.
+                score = 100 if wall_name != self.door_wall else -1000
+                candidate_walls.append((wall_name, score))
+        
+        if not candidate_walls:
+            raise Exception("No suitable wall for wardrobe placement")
+        
+        candidate_walls.sort(key=lambda x: x[1], reverse=True)
+        
+        return candidate_walls[0][0]
+
+
+    def calculate_layout(self, dressing_table_side='right'):
+        """Calculate complete layout with constraint solver"""
+        
+        validation_issues = []
+        self.placed_furniture = []
+        
+        ext_wall = self.external_wall_thickness
+        
+        # 1. WALLS
+        walls = {
+            'external': {
+                'top': {'x': 0, 'y': self.external_depth - ext_wall, 'width': self.external_width, 'depth': ext_wall, 'thickness': ext_wall},
+                'bottom': {'x': 0, 'y': 0, 'width': self.external_width, 'depth': ext_wall, 'thickness': ext_wall},
+                'left': {'x': 0, 'y': 0, 'width': ext_wall, 'depth': self.external_depth, 'thickness': ext_wall},
+                'right': {'x': self.external_width - ext_wall, 'y': 0, 'width': ext_wall, 'depth': self.external_depth, 'thickness': ext_wall}
+            },
+            'internal': None  # Will be calculated based on bed wall
+        }
+        
+        # 2. DOOR - Place on user-specified wall
+        door_wall_info = self.get_wall_info(self.door_wall)
+        
+        if self.door_wall in ['top', 'bottom']:
+            door_x = ext_wall + max(0, min(self.door_from_wall, self.internal_width - self.door_width))
+            door_y = ext_wall + self.internal_depth if self.door_wall == 'top' else ext_wall
+            door = {
+                'id': f'DOOR-{self.room_id}-001',
+                'x': door_x,
+                'y': door_y,
+                'width': self.door_width,
+                'depth': 50,
+                'wall': self.door_wall,
+                'hinge': self.door_hinge,
+                'swing': self.door_swing,
+                'swing_radius': self.door_width,
+                'open_angle': self.door_open_angle_deg
+            }
+        else:
+            door_y = ext_wall + max(0, min(self.door_from_wall, self.internal_depth - self.door_width))
+            door_x = ext_wall + self.internal_width if self.door_wall == 'right' else ext_wall
+            door = {
+                'id': f'DOOR-{self.room_id}-001',
+                'x': door_x,
+                'y': door_y,
+                'width': 50,
+                'depth': self.door_width,
+                'wall': self.door_wall,
+                'hinge': self.door_hinge,
+                'swing': self.door_swing,
+                'swing_radius': self.door_width,
+                'open_angle': self.door_open_angle_deg
+            }
+        
+        # 3. WINDOW - Place on user-specified wall
+        window_wall_info = self.get_wall_info(self.window_wall)
+        
+        if self.window_wall in ['top', 'bottom']:
+            window_x = ext_wall + (self.internal_width - self.window_width) / 2
+            window_y = ext_wall + self.internal_depth if self.window_wall == 'top' else ext_wall
+            window = {
+                'id': f'WIN-{self.room_id}-001',
+                'x': window_x,
+                'y': window_y,
+                'width': self.window_width,
+                'depth': 50,
+                'wall': self.window_wall,
+                'sill_height': self.window_sill
+            }
+        else:
+            window_y = ext_wall + (self.internal_depth - self.window_width) / 2
+            window_x = ext_wall + self.internal_width if self.window_wall == 'right' else ext_wall
+            window = {
+                'id': f'WIN-{self.room_id}-001',
+                'x': window_x,
+                'y': window_y,
+                'width': 50,
+                'depth': self.window_width,
+                'wall': self.window_wall,
+                'sill_height': self.window_sill
+            }
+        
+        # 4. BED - Find best wall and place
+        bed_wall = self.find_best_bed_wall()
+        bed_x, bed_y, bed_w, bed_d = self.place_item_on_wall(bed_wall, self.bed_width, self.bed_depth, center=True)
+        
+        bed_data = {
+            **self.furniture_specs['bed'],
+            'x': bed_x,
+            'y': bed_y,
+            'width': bed_w,
+            'depth': bed_d,
+            'wall': bed_wall
+        }
+        self.placed_furniture.append(bed_data)
+        
+        # 5. HEADBOARD - Place behind bed
+        headboard_x, headboard_y, headboard_w, headboard_d = self.place_item_on_wall(bed_wall, self.headboard_width, 50, center=True)
+        
+        headboard_data = {
+            **self.furniture_specs['headboard'],
+            'x': headboard_x,
+            'y': headboard_y,
+            'width': headboard_w,
+            'depth': headboard_d,
+            'wall': bed_wall
+        }
+        
+        # 6. BEDSIDE TABLES - RIGIDLY ANCHORED TO BED GROUP
+        furniture = {'bed': bed_data, 'headboard': headboard_data}
+
+        # Never delete bedside tables. If the bed wall is tight, shrink bedside width to fit.
+        if self.bedside_table_count > 0:
+            wall = self.get_wall_info(bed_wall)
+            needed = self.bed_width + (self.bedside_table_width * self.bedside_table_count)
+            margin = 100
+            if wall['length'] < needed + margin:
+                # Shrink bedside tables but keep a sane minimum
+                avail = max(0, wall['length'] - self.bed_width - margin)
+                new_w = max(350, avail / self.bedside_table_count)
+                self.bedside_table_width = int(new_w)
+                self.furniture_specs['bedside_table_left']['width'] = self.bedside_table_width
+                self.furniture_specs['bedside_table_right']['width'] = self.bedside_table_width
+
+        # Bedside tables must TOUCH the bed and remain part of the rigid bed group.
+        # NOTE: Layout rectangles are axis-aligned, so on vertical walls we must swap dims.
+        if self.bedside_table_count >= 1:
+            if bed_wall in ['top', 'bottom']:
+                bst_left_x = bed_x - self.bedside_table_width
+                bst_left_y = bed_y
+                bst_left_w = self.bedside_table_width
+                bst_left_d = self.bedside_table_depth
+            else:
+                # Along wall is Y, into room is X
+                bst_left_x = bed_x
+                bst_left_y = bed_y - self.bedside_table_width
+                bst_left_w = self.bedside_table_depth
+                bst_left_d = self.bedside_table_width
+
+            bst_left_data = {
+                **self.furniture_specs['bedside_table_left'],
+                'x': bst_left_x,
+                'y': bst_left_y,
+                'width': bst_left_w,
+                'depth': bst_left_d,
+                'wall': bed_wall
+            }
+            furniture['bedside_table_left'] = bst_left_data
+            self.placed_furniture.append(bst_left_data)
+
+        if self.bedside_table_count == 2:
+            if bed_wall in ['top', 'bottom']:
+                bst_right_x = bed_x + bed_w
+                bst_right_y = bed_y
+                bst_right_w = self.bedside_table_width
+                bst_right_d = self.bedside_table_depth
+            else:
+                bst_right_x = bed_x
+                bst_right_y = bed_y + bed_d
+                bst_right_w = self.bedside_table_depth
+                bst_right_d = self.bedside_table_width
+
+            bst_right_data = {
+                **self.furniture_specs['bedside_table_right'],
+                'x': bst_right_x,
+                'y': bst_right_y,
+                'width': bst_right_w,
+                'depth': bst_right_d,
+                'wall': bed_wall
+            }
+            furniture['bedside_table_right'] = bst_right_data
+            self.placed_furniture.append(bst_right_data)
+
+        # 7. WARDROBE OPTIONS (explicit user mode + auto thresholds)
+        mode = self.resolve_wardrobe_mode()
+        wardrobe_is_enclosed = mode in ('enclosed', 'walkin_l', 'walkin_u')
+        wardrobe_is_walkin = mode in ('walkin_l', 'walkin_u')
+        walkin_aisle = self._walkin_aisle_depth(prefer=900, tight=750) if wardrobe_is_walkin else 0
+        walkin_band = 600 + walkin_aisle if wardrobe_is_walkin else 0  # wardrobe depth + aisle
+
+        # 7. WARDROBE (never deleted; may be shrunk/repositioned)
+        wardrobe_wall = self.find_best_wardrobe_wall(bed_wall)
+
+        # Pick a placement segment that avoids door/window zones on the wardrobe wall
+        required_len = self.wardrobe_width
+        off = self._largest_free_segment(wardrobe_wall, required_len)
+        if off is None:
+            # If the wardrobe wall has an opening and no segment fits, fall back to a wall without openings
+            for alt in ['top','bottom','left','right']:
+                if alt in (self.window_wall,):
+                    continue
+                if alt == {'top':'bottom','bottom':'top','left':'right','right':'left'}[bed_wall]:
+                    continue
+                off = self._largest_free_segment(alt, required_len)
+                if off is not None:
+                    wardrobe_wall = alt
+                    break
+
+        # If we still couldn't find a segment on the chosen wall, SHRINK the wardrobe to fit the largest free segment.
+        if off is None:
+            wall = self.get_wall_info(wardrobe_wall)
+            intervals = self._opening_intervals_on_wall(wardrobe_wall)
+            # compute free segments
+            free = []
+            cur = 0
+            for a, b in intervals:
+                if a - cur > 0:
+                    free.append((cur, a))
+                cur = max(cur, b)
+            if wall['length'] - cur > 0:
+                free.append((cur, wall['length']))
+
+            if free:
+                free.sort(key=lambda s: s[1] - s[0], reverse=True)
+                a, b = free[0]
+                max_len = b - a
+                if max_len >= 800:  # minimum viable wardrobe
+                    required_len = min(required_len, max_len)
+                    self.wardrobe_width = int(required_len)
+                    self.furniture_specs['wardrobe']['width'] = int(required_len)
+                    off = a + (max_len - required_len) / 2
+
+        if off is None:
+            wardrobe_x, wardrobe_y, wardrobe_w, wardrobe_d = self.place_item_on_wall(wardrobe_wall, self.wardrobe_width, 600, center=True)
+        else:
+            wardrobe_x, wardrobe_y, wardrobe_w, wardrobe_d = self.place_item_on_wall(wardrobe_wall, self.wardrobe_width, 600, offset_from_start=off, center=False)
+
+        wardrobe_data = {
+            **self.furniture_specs['wardrobe'],
+            'x': wardrobe_x,
+            'y': wardrobe_y,
+            'width': wardrobe_w,
+            'depth': wardrobe_d,
+            'wall': wardrobe_wall
+        }
+        furniture['wardrobe'] = wardrobe_data
+        self.placed_furniture.append(wardrobe_data)
+
+
+
+        # Enclosure walls (optional): two return walls, each 600mm length, 120mm thick, full room height.
+        # They start at the wall line and are anchored to wardrobe sides without overlapping the wardrobe volume.
+
+        enclosure = []
+        if wardrobe_is_enclosed:
+            t = self.internal_wall_thickness  # 120
+            L = 600  # must match wardrobe depth
+
+            if wardrobe_wall in ['top', 'bottom']:
+                # Returns are vertical segments at wardrobe ends, running from the wall line into the room
+                # spanning exactly the wardrobe depth.
+                enclosure.append({
+                    'id': f'WALL-{self.room_id}-WL',
+                    'x': wardrobe_x - t,
+                    'y': wardrobe_y,
+                    'width': t,
+                    'depth': L,
+                    'height': self.height
+                })
+                enclosure.append({
+                    'id': f'WALL-{self.room_id}-WR',
+                    'x': wardrobe_x + wardrobe_w,
+                    'y': wardrobe_y,
+                    'width': t,
+                    'depth': L,
+                    'height': self.height
+                })
+            else:
+                # Returns are horizontal segments at wardrobe ends, running from the wall line into the room
+                # spanning exactly the wardrobe depth.
+                enclosure.append({
+                    'id': f'WALL-{self.room_id}-WB',
+                    'x': wardrobe_x,
+                    'y': wardrobe_y - t,
+                    'width': L,
+                    'depth': t,
+                    'height': self.height
+                })
+                enclosure.append({
+                    'id': f'WALL-{self.room_id}-WT',
+                    'x': wardrobe_x,
+                    'y': wardrobe_y + wardrobe_d,
+                    'width': L,
+                    'depth': t,
+                    'height': self.height
+                })
+
+        walls['wardrobe_enclosure'] = enclosure if wardrobe_is_enclosed else []
+
+        # Enforce min 750mm between wardrobe and bed by shifting the BED GROUP along its wall (never delete items).
+        bed_rect = (bed_data['x'], bed_data['y'], bed_data['width'], bed_data['depth'])
+        wr_rect = (wardrobe_data['x'], wardrobe_data['y'], wardrobe_data['width'], wardrobe_data['depth'])
+        min_clear=750
+        dist=self._rect_distance(bed_rect, wr_rect)
+        if dist < min_clear:
+            # Move bed group along wall axis away from wardrobe, within wall bounds
+            wall = self.get_wall_info(bed_wall)
+            if bed_wall in ['top','bottom']:
+                # shift in X
+                direction = -1 if bed_data['x'] > wardrobe_data['x'] else 1
+                delta = (min_clear - dist) + 50
+                new_x = bed_data['x'] + direction*delta
+                # clamp
+                min_x = wall['start'][0]
+                max_x = wall['start'][0] + wall['length'] - self.bed_width
+                new_x = max(min_x, min(max_x, new_x))
+                dx = new_x - bed_data['x']
+                for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
+                    if k in furniture:
+                        furniture[k]['x'] += dx
+                bed_data['x']=furniture['bed']['x']
+            else:
+                # shift in Y
+                direction = -1 if bed_data['y'] > wardrobe_data['y'] else 1
+                delta = (min_clear - dist) + 50
+                new_y = bed_data['y'] + direction*delta
+                min_y = wall['start'][1]
+                max_y = wall['start'][1] + wall['length'] - self.bed_width
+                new_y = max(min_y, min(max_y, new_y))
+                dy = new_y - bed_data['y']
+                for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
+                    if k in furniture:
+                        furniture[k]['y'] += dy
+                bed_data['y']=furniture['bed']['y']
+
+        # Walk-in wardrobe reserved zone: keep the bed group out of the wardrobe+aisle band
+        if wardrobe_is_walkin:
+            # Define a rectangular band in front of the wardrobe (wardrobe depth + aisle)
+            if wardrobe_wall == 'bottom':
+                zone = (wardrobe_data['x'], 0, wardrobe_data['width'], walkin_band)
+            elif wardrobe_wall == 'top':
+                zone = (wardrobe_data['x'], self.internal_depth - walkin_band, wardrobe_data['width'], walkin_band)
+            elif wardrobe_wall == 'left':
+                zone = (0, wardrobe_data['y'], walkin_band, wardrobe_data['depth'])
+            else:  # right
+                zone = (self.internal_width - walkin_band, wardrobe_data['y'], walkin_band, wardrobe_data['depth'])
+
+            def _intersect(r1, r2):
+                x1,y1,w1,d1=r1; x2,y2,w2,d2=r2
+                return not (x1+w1 <= x2 or x2+w2 <= x1 or y1+d1 <= y2 or y2+d2 <= y1)
+
+            bed_rect = (furniture['bed']['x'], furniture['bed']['y'], furniture['bed']['width'], furniture['bed']['depth'])
+            if _intersect(bed_rect, zone):
+                # Try push the bed group away from the wardrobe wall (perpendicular shift)
+                push = 50
+                if wardrobe_wall == 'bottom':
+                    target_y = walkin_band + 750
+                    dy = max(0, target_y - furniture['bed']['y'])
+                    max_y = self.internal_depth - furniture['bed']['depth']
+                    dy = min(dy, max(0, max_y - furniture['bed']['y']))
+                    for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
+                        if k in furniture:
+                            furniture[k]['y'] += dy
+                elif wardrobe_wall == 'top':
+                    target_y = self.internal_depth - walkin_band - 750 - furniture['bed']['depth']
+                    dy = min(0, target_y - furniture['bed']['y'])
+                    min_y = 0
+                    dy = max(dy, min_y - furniture['bed']['y'])
+                    for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
+                        if k in furniture:
+                            furniture[k]['y'] += dy
+                elif wardrobe_wall == 'left':
+                    target_x = walkin_band + 750
+                    dx = max(0, target_x - furniture['bed']['x'])
+                    max_x = self.internal_width - furniture['bed']['width']
+                    dx = min(dx, max(0, max_x - furniture['bed']['x']))
+                    for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
+                        if k in furniture:
+                            furniture[k]['x'] += dx
+                else:  # right
+                    target_x = self.internal_width - walkin_band - 750 - furniture['bed']['width']
+                    dx = min(0, target_x - furniture['bed']['x'])
+                    min_x = 0
+                    dx = max(dx, min_x - furniture['bed']['x'])
+                    for k in ['bed','headboard','bedside_table_left','bedside_table_right','banquet']:
+                        if k in furniture:
+                            furniture[k]['x'] += dx
+
+        # 8. TV UNIT - Place opposite to bed
+        opposite_walls = {
+            'top': 'bottom',
+            'bottom': 'top',
+            'left': 'right',
+            'right': 'left'
+        }
+        
+        tv_wall = opposite_walls[bed_wall]
+        tv_x, tv_y, tv_w, tv_d = self.place_item_on_wall(tv_wall, self.tv_unit_width, 400, center=True)
+        
+        tv_data = {
+            **self.furniture_specs['tv_unit'],
+            'x': tv_x,
+            'y': tv_y,
+            'width': tv_w,
+            'depth': tv_d,
+            'wall': tv_wall
+        }
+        furniture['tv_unit'] = tv_data
+        self.placed_furniture.append(tv_data)
+        
+        # 9. DRESSING TABLE - MUST BE BESIDE TV, SAME DEPTH AS TV UNIT, NEVER DELETED
+        # Match TV unit depth into room (keep CAD consistency)
+        dt_depth = 400
+        dt_width = self.dressing_table_width
+
+        # Candidate: beside TV on same wall
+        gap=100
+        wall = self.get_wall_info(tv_wall)
+        along_axis_start = wall['start'][0] if wall['direction']=='horizontal' else wall['start'][1]
+        tv_off = (tv_x - wall['start'][0]) if wall['direction']=='horizontal' else (tv_y - wall['start'][1])
+        tv_along = self.tv_unit_width
+
+        if dressing_table_side == 'right':
+            dt_off = tv_off + tv_along + gap
+        else:
+            dt_off = tv_off - dt_width - gap
+
+        # Clamp/resize to fit wall
+        if dt_off < 0:
+            dt_off = 0
+        if dt_off + dt_width > wall['length']:
+            dt_width = max(600, wall['length'] - dt_off)
+
+        dt_x, dt_y, dt_w, dt_d = self.place_item_on_wall(tv_wall, dt_width, dt_depth, offset_from_start=dt_off, center=False)
+
+        dt_data = {
+            **self.furniture_specs['dressing_table'],
+            'x': dt_x,
+            'y': dt_y,
+            'width': dt_w,
+            'depth': dt_d,
+            'wall': tv_wall
+        }
+        furniture['dressing_table'] = dt_data
+        self.placed_furniture.append(dt_data)
+
+        # 9b. TV PANEL (wall mounted) + MIRROR (above dressing) as BIM-like thin elements
+        # TV sizing from diagonal (16:9): width ≈ 0.871*diag, height ≈ 0.49*diag
+        diag_mm = float(self.tv_size) * 25.4
+        tv_w = max(500.0, diag_mm * 0.871)
+        tv_h = max(300.0, diag_mm * 0.490)
+        tv_t = 40.0
+
+        # Place TV centered above the TV unit along the same wall, flush to wall plane
+        tv_off = (tv_off + (tv_along - tv_w)/2)
+        tv_x, tv_y, tv_rect_w, tv_rect_d = self.place_item_on_wall(tv_wall, tv_w, tv_t, offset_from_start=tv_off, center=False)
+
+        tv_panel = {
+            'id': f'TV-{self.room_id}-001',
+            'x': tv_x,
+            'y': tv_y,
+            'width': tv_rect_w,
+            'depth': tv_rect_d,
+            'height': tv_h,
+            'mount_z': self._recommended_tv_center_z() - tv_h/2,
+            'wall': tv_wall,
+            'material': 'Electronics',
+            'unit_cost': 0,
+        }
+
+        mirror_t = 30.0
+        mirror_w = min(1200.0, max(600.0, dt_width))
+        mirror_h = 900.0
+        # Mirror centered above dressing table on same wall
+        dt_off2 = (dt_x - wall['start'][0]) if wall['direction']=='horizontal' else (dt_y - wall['start'][1])
+        m_off = dt_off2 + (dt_width - mirror_w)/2
+        m_x, m_y, m_rect_w, m_rect_d = self.place_item_on_wall(tv_wall, mirror_w, mirror_t, offset_from_start=m_off, center=False)
+        mirror = {
+            'id': f'MIR-{self.room_id}-001',
+            'x': m_x,
+            'y': m_y,
+            'width': m_rect_w,
+            'depth': m_rect_d,
+            'height': mirror_h,
+            'mount_z': 1100.0,
+            'wall': tv_wall,
+            'material': 'Glass',
+            'unit_cost': 0,
+        }
+
+        furniture['tv_panel'] = tv_panel
+        furniture['mirror'] = mirror
+
+        # 10. BANQUET - Place at foot of bed if included
+        if self.include_banquet:
+            if bed_wall in ['top', 'bottom']:
+                banquet_x = bed_x + (self.bed_width - self.banquet_width) / 2
+                banquet_y = bed_y + self.bed_depth + 100 if bed_wall == 'bottom' else bed_y - self.banquet_depth - 100
+            else:
+                banquet_x = bed_x + self.bed_width + 100 if bed_wall == 'left' else bed_x - self.banquet_width - 100
+                banquet_y = bed_y + (self.bed_depth - self.banquet_depth) / 2
+            
+            banquet_data = {
+                **self.furniture_specs['banquet'],
+                'x': banquet_x,
+                'y': banquet_y
+            }
+            furniture['banquet'] = banquet_data
+        
+        # 11. SYSTEMS
+        systems = self.calculate_systems(furniture)
+        
+        # 12. BOQ
+        boq = self.generate_boq(furniture, systems)
+        
+        # 13. METADATA
+        metadata = {
+            'room_id': self.room_id,
+            'tv_size': self.tv_size,
+            'viewing_distance': self.clearances['tv_viewing_distance'],
+            'bed_wall': bed_wall,
+            'wardrobe_wall': wardrobe_wall,
+            'wardrobe_mode': mode,
+            'walkin_aisle': self._walkin_aisle_depth() if mode in ('walkin_l','walkin_u') else 0,
+            'tv_wall': tv_wall,
+            'window_wall': self.window_wall,
+            'door_wall': self.door_wall,
+            'bedside_table_count': self.bedside_table_count,
+            'include_banquet': self.include_banquet,
+            'validation_issues': validation_issues,
+            'generated_at': datetime.now().isoformat()
+        }
+        
+        return {
+            'room': {
+                'id': self.room_id,
+                'internal_width': self.internal_width,
+                'internal_depth': self.internal_depth,
+                'external_width': self.external_width,
+                'external_depth': self.external_depth,
+                'height': self.height,
+                'area_m2': round((self.internal_width * self.internal_depth) / 1000000, 2),
+                'external_wall_thickness': self.external_wall_thickness,
+                'internal_wall_thickness': self.internal_wall_thickness
+            },
+            'walls': walls,
+            'architectural': {
+                'door': door,
+                'window': window,
+                'bed_wall': {'type': bed_wall}
+            },
+            'furniture': furniture,
+            'systems': systems,
+            'boq': boq,
+            'metadata': metadata
+        }
+    
+    def calculate_systems(self, furniture):
+        """Calculate electrical, lighting, and AC systems"""
+        systems = {
+            'electrical': [],
+            'lighting': [],
+            'ac': []
+        }
+        
+        socket_id = 1
+        
+        # Electrical sockets
+        if self.include_electrical:
+            # TV wall socket
+            systems['electrical'].append({
+                'id': f'ELEC-{self.room_id}-{socket_id:03d}',
+                'type': '5-pin socket',
+                'location': 'tv_wall',
+                'quantity': 2,
+                'unit_cost': 25
+            })
+            socket_id += 1
+            
+            # Bedside sockets
+            if 'bedside_table_left' in furniture:
+                systems['electrical'].append({
+                    'id': f'ELEC-{self.room_id}-{socket_id:03d}',
+                    'type': '5-pin socket',
+                    'location': 'bedside_left',
+                    'quantity': 1,
+                    'unit_cost': 25
+                })
+                socket_id += 1
+            
+            if 'bedside_table_right' in furniture:
+                systems['electrical'].append({
+                    'id': f'ELEC-{self.room_id}-{socket_id:03d}',
+                    'type': '5-pin socket',
+                    'location': 'bedside_right',
+                    'quantity': 1,
+                    'unit_cost': 25
+                })
+                socket_id += 1
+            
+            # Dressing table socket
+            systems['electrical'].append({
+                'id': f'ELEC-{self.room_id}-{socket_id:03d}',
+                'type': '5-pin socket',
+                'location': 'dressing_table',
+                'quantity': 1,
+                'unit_cost': 25
+            })
+        
+        # Lighting
+        if self.include_lighting:
+            light_count = int((self.internal_width * self.internal_depth) / 4000000) + 2
+            
+            for i in range(light_count):
+                systems['lighting'].append({
+                    'id': f'LIGHT-{self.room_id}-{i+1:03d}',
+                    'type': self.lighting_type,
+                    'wattage': 15,
+                    'unit_cost': 50
+                })
+        
+        # AC
+        if self.include_ac:
+            ac_capacity = self.calculate_ac_capacity()
+            systems['ac'].append({
+                'id': f'AC-{self.room_id}-001',
+                'type': self.ac_type,
+                'capacity_hp': ac_capacity,
+                'capacity_btu': int(ac_capacity * 12000 / 1.5),
+                'unit_cost': int(ac_capacity * 500)
+            })
+        
+        return systems
+    
+    def generate_boq(self, furniture, systems):
+        """Generate Bill of Quantities"""
+        items = []
+        
+        # Furniture
+        for name, item in furniture.items():
+            items.append({
+                'id': item['id'],
+                'category': 'Furniture',
+                'item': name.replace('_', ' ').title(),
+                'specification': f"{item['width']}x{item['depth']}x{item['height']}mm - {item['material']}",
+                'quantity': 1,
+                'unit': 'nos',
+                'unit_cost': item['unit_cost'],
+                'total_cost': item['unit_cost']
+            })
+        
+        # Electrical
+        for socket in systems['electrical']:
+            items.append({
+                'id': socket['id'],
+                'category': 'Electrical',
+                'item': socket['type'],
+                'specification': socket['location'],
+                'quantity': socket['quantity'],
+                'unit': 'nos',
+                'unit_cost': socket['unit_cost'],
+                'total_cost': socket['quantity'] * socket['unit_cost']
+            })
+        
+        # Lighting
+        for light in systems['lighting']:
+            items.append({
+                'id': light['id'],
+                'category': 'Lighting',
+                'item': f"{light['type']} - {light['wattage']}W",
+                'specification': 'LED downlight',
+                'quantity': 1,
+                'unit': 'nos',
+                'unit_cost': light['unit_cost'],
+                'total_cost': light['unit_cost']
+            })
+        
+        # AC
+        for ac in systems['ac']:
+            items.append({
+                'id': ac['id'],
+                'category': 'AC',
+                'item': f"{ac['type']} - {ac['capacity_hp']} HP",
+                'specification': f"{ac['capacity_btu']} BTU",
+                'quantity': 1,
+                'unit': 'nos',
+                'unit_cost': ac['unit_cost'],
+                'total_cost': ac['unit_cost']
+            })
+        
+        total_cost = sum(item['total_cost'] for item in items)
+        
+        return {
+            'items': items,
+            'total_cost': total_cost,
+            'currency': 'USD'
+        }
+    
+    def create_visualization(self, layout):
+        """Create 2D floor plan visualization"""
+        fig, ax = plt.subplots(figsize=(18, 16))
+        
+        ext_wall = layout['room']['external_wall_thickness']
+        ext_width = layout['room']['external_width']
+        ext_depth = layout['room']['external_depth']
+        
+        # Draw external walls
+        wall_color = '#9ca3af'
+        for wall_name, wall in layout['walls']['external'].items():
+            rect = patches.Rectangle(
+                (wall['x'], wall['y']),
+                wall['width'],
+                wall['depth'],
+                linewidth=0,
+                facecolor=wall_color,
+                alpha=0.8,
+                zorder=2
+            )
+            ax.add_patch(rect)
+        
+
+        # Draw wardrobe enclosure walls (two returns) - 600mm length x 120mm thick
+        for w in layout['walls'].get('wardrobe_enclosure', []):
+            rect = patches.Rectangle(
+                (w['x'], w['y']),
+                w['width'],
+                w['depth'],
+                linewidth=0,
+                facecolor='#d1d5db',
+                alpha=0.9,
+                zorder=2
+            )
+            ax.add_patch(rect)
+
+        # CAD/BIM-like boolean openings: cut door and window openings out of the wall bands
+        bg = 'white'
+        door = layout['architectural']['door']
+        window = layout['architectural']['window']
+
+        def cut_opening(opening, is_door: bool):
+            wn = opening['wall']
+            wall = layout['walls']['external'][wn]
+            if wn in ['top', 'bottom']:
+                ox = float(opening['x'])
+                ow = float(opening['width'])
+                oy = float(wall['y'])
+                od = float(wall['depth'])
+            else:
+                ox = float(wall['x'])
+                ow = float(wall['width'])
+                oy = float(opening['y'])
+                od = float(opening['depth'])
+
+            ax.add_patch(
+                patches.Rectangle(
+                    (ox, oy), ow, od,
+                    linewidth=0,
+                    facecolor=bg,
+                    zorder=2.5,
+                )
+            )
+
+        cut_opening(door, is_door=True)
+        cut_opening(window, is_door=False)
+        
+        
+        # Draw door (HINGED LEAF - NO ARC). Leaf can be shown at open_angle (default 0deg closed).
+        door = layout['architectural']['door']
+        door_wall = door['wall']
+        
+        # Opening line (jamb)
+        if door_wall in ['top', 'bottom']:
+            ax.plot([door['x'], door['x'] + door['width']], [door['y'], door['y']], color='#111827', linewidth=2, zorder=3)
+        else:
+            ax.plot([door['x'], door['x']], [door['y'], door['y'] + door['depth']], color='#111827', linewidth=2, zorder=3)
+        
+        # Leaf line
+        ang = float(door.get('open_angle', 45))
+        # hinge point
+        if door_wall in ['top','bottom']:
+            hx = door['x'] if door['hinge']=='left' else door['x']+door['width']
+            hy = door['y']
+            # into room direction
+            sign = -1 if door_wall=='top' else 1
+            # rotate from wall axis into room
+            # 0deg is along wall; leaf swings into room
+            theta = (90 - ang) if door['hinge']=='left' else (90 + ang)
+            import numpy as _np
+            rad = _np.deg2rad(theta)
+            lx = hx + door['width'] * _np.cos(rad)
+            ly = hy + sign * abs(door['width'] * _np.sin(rad))
+            ax.plot([hx, lx], [hy, ly], color='#111827', linewidth=2, zorder=3)
+        else:
+            hy = door['y'] if door['hinge']=='left' else door['y']+door['depth']
+            hx = door['x']
+            sign = -1 if door_wall=='right' else 1
+            import numpy as _np
+            theta = (0 + ang) if door['hinge']=='left' else (180 - ang)
+            rad = _np.deg2rad(theta)
+            lx = hx + sign * abs(door['depth'] * _np.cos(rad))
+            ly = hy + door['depth'] * _np.sin(rad)
+            ax.plot([hx, lx], [hy, ly], color='#111827', linewidth=2, zorder=3)
+        
+                
+        # Draw window (SLIDING symbol)
+        window = layout['architectural']['window']
+        if window['wall'] in ['top', 'bottom']:
+            x0 = window['x']; x1 = window['x'] + window['width']
+            y = window['y']
+            # two rails inside the wall thickness
+            ax.plot([x0, x1], [y + 15, y + 15], color='#111827', linewidth=2, zorder=3)
+            ax.plot([x0, x1], [y - 15, y - 15], color='#111827', linewidth=2, zorder=3)
+            # sliding panel line (center)
+            ax.plot([x0 + window['width']/2, x0 + window['width']/2], [y - 15, y + 15], color='#111827', linewidth=2, zorder=3)
+        else:
+            y0 = window['y']; y1 = window['y'] + window['depth']
+            x = window['x']
+            ax.plot([x + 15, x + 15], [y0, y1], color='#111827', linewidth=2, zorder=3)
+            ax.plot([x - 15, x - 15], [y0, y1], color='#111827', linewidth=2, zorder=3)
+            ax.plot([x - 15, x + 15], [y0 + window['depth']/2, y0 + window['depth']/2], color='#111827', linewidth=2, zorder=3)
+        
+        # Draw furniture (CAD-like: white fill, dark outline, short tags)
+        ordered_keys = [
+            'bed', 'headboard', 'bedside_table_left', 'bedside_table_right',
+            'wardrobe', 'tv_unit', 'tv_panel', 'dressing_table', 'mirror',
+            'banquet'
+        ]
+        # Keep remaining keys at the end
+        rest = [k for k in layout['furniture'].keys() if k not in ordered_keys]
+        keys = [k for k in ordered_keys if k in layout['furniture']] + rest
+
+        for idx, name in enumerate(keys, start=1):
+            item = layout['furniture'][name]
+            tag = f"FUR-{idx:02d}"
+            rect = patches.Rectangle(
+                (item['x'], item['y']),
+                item['width'],
+                item['depth'],
+                linewidth=1.8,
+                edgecolor='#111827',
+                facecolor='white',
+                alpha=1.0,
+                zorder=4
+            )
+            ax.add_patch(rect)
+
+            ax.text(
+                item['x'] + 20,
+                item['y'] + item['depth'] - 30,
+                tag,
+                ha='left', va='top',
+                fontsize=8, fontweight='bold',
+                color='#111827',
+                zorder=5
+            )
+        
+        # (Optional) sockets: intentionally omitted from the CAD plan to avoid confusing symbols.
+        
+        # Set up plot
+        ax.set_xlim(-400, ext_width + 400)
+        ax.set_ylim(-400, ext_depth + 400)
+        ax.set_aspect('equal')
+        ax.set_xlabel('Width (mm)', fontsize=12)
+        ax.set_ylabel('Depth (mm)', fontsize=12)
+        ax.set_title(f'BEDROOM LAYOUT - ID: {self.room_id} | TV: {layout["metadata"]["tv_size"]}" | Total: ${layout["boq"]["total_cost"]}',
+                    fontsize=14, fontweight='bold', pad=20)
+        ax.grid(True, alpha=0.2, linestyle='--')
+        
+        plt.tight_layout()
+        return fig
+            
+    def generate_3d_view(self, layout):
+        """Generate 3D view with proper orbit controls"""
+        fig = plt.figure(figsize=(16, 14))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        ext_width = layout['room']['external_width']
+        ext_depth = layout['room']['external_depth']
+        height = layout['room']['height']
+        
+        # Draw floor
+        X, Y = np.meshgrid([0, ext_width], [0, ext_depth])
+        Z = np.zeros_like(X)
+        ax.plot_surface(X, Y, Z, alpha=0.3, color='#d1d5db')
+        
+
+        # Draw BIM-like walls with boolean-like openings (door + window) and lintels/sills
+        wall_color = '#9ca3af'
+        edge_color = '#6b7280'
+        
+        def add_plane(poly, alpha=0.85, fc=wall_color):
+            ax.add_collection3d(Poly3DCollection([poly], alpha=alpha, facecolor=fc, edgecolor=edge_color))
+        
+        # Helper to add wall segments on each boundary plane
+        def add_wall_segments(wall_name, along_len, opening=None, opening_z=(0,0), opening_type=None):
+            """wall_name: bottom/top/left/right. opening: (a,b) along axis, opening_z: (z0,z1) void."""
+            segments=[(0,along_len)]
+            if opening:
+                a,b=opening
+                new=[]
+                for s0,s1 in segments:
+                    if b<=s0 or a>=s1:
+                        new.append((s0,s1))
+                    else:
+                        if a>s0: new.append((s0,a))
+                        if b<s1: new.append((b,s1))
+                segments=new
+            # create solid segments
+            for s0,s1 in segments:
+                if wall_name=='bottom':
+                    add_plane([[s0,0,0],[s1,0,0],[s1,0,height],[s0,0,height]])
+                elif wall_name=='top':
+                    add_plane([[s0,ext_depth,0],[s1,ext_depth,0],[s1,ext_depth,height],[s0,ext_depth,height]])
+                elif wall_name=='left':
+                    add_plane([[0,s0,0],[0,s1,0],[0,s1,height],[0,s0,height]])
+                elif wall_name=='right':
+                    add_plane([[ext_width,s0,0],[ext_width,s1,0],[ext_width,s1,height],[ext_width,s0,height]])
+        
+            # If there is an opening, add sill/lintel pieces on that same plane
+            if opening and opening_type in ('door','window'):
+                a,b=opening
+                z0,z1=opening_z
+                if z1 < height:  # lintel above
+                    if wall_name=='bottom':
+                        add_plane([[a,0,z1],[b,0,z1],[b,0,height],[a,0,height]])
+                    elif wall_name=='top':
+                        add_plane([[a,ext_depth,z1],[b,ext_depth,z1],[b,ext_depth,height],[a,ext_depth,height]])
+                    elif wall_name=='left':
+                        add_plane([[0,a,z1],[0,b,z1],[0,b,height],[0,a,height]])
+                    elif wall_name=='right':
+                        add_plane([[ext_width,a,z1],[ext_width,b,z1],[ext_width,b,height],[ext_width,a,height]])
+                if opening_type=='window' and z0>0:  # wall below sill
+                    if wall_name=='bottom':
+                        add_plane([[a,0,0],[b,0,0],[b,0,z0],[a,0,z0]])
+                    elif wall_name=='top':
+                        add_plane([[a,ext_depth,0],[b,ext_depth,0],[b,ext_depth,z0],[a,ext_depth,z0]])
+                    elif wall_name=='left':
+                        add_plane([[0,a,0],[0,b,0],[0,b,z0],[0,a,z0]])
+                    elif wall_name=='right':
+                        add_plane([[ext_width,a,0],[ext_width,b,0],[ext_width,b,z0],[ext_width,a,z0]])
+        
+        # Determine door/window intervals in wall axis coords
+        door = layout['architectural']['door']
+        window = layout['architectural']['window']
+        
+        # Default: no openings
+        for wn in ['bottom','top','left','right']:
+            opening=None; oz=(0,0); otype=None
+            if door['wall']==wn:
+                if wn in ['bottom','top']:
+                    a=float(door['x']); b=float(door['x']+door['width'])
+                else:
+                    a=float(door['y']); b=float(door['y']+door['depth'])
+                opening=(a,b); oz=(0,float(self.door_height)); otype='door'
+            elif window['wall']==wn:
+                if wn in ['bottom','top']:
+                    a=float(window['x']); b=float(window['x']+window['width'])
+                else:
+                    a=float(window['y']); b=float(window['y']+window['depth'])
+                opening=(a,b); oz=(float(self.window_sill), float(self.window_sill+self.window_height)); otype='window'
+        
+            along = ext_width if wn in ['bottom','top'] else ext_depth
+            add_wall_segments(wn, along, opening=opening, opening_z=oz, opening_type=otype)
+        
+        # Add wardrobe enclosure walls as 3D boxes (full height)
+        for w in layout['walls'].get('wardrobe_enclosure', []):
+            x,y = w['x'], w['y']
+            wW, wD = w['width'], w['depth']
+            h = w.get('height', height)
+            verts = [
+                [x,y,0],[x+wW,y,0],[x+wW,y+wD,0],[x,y+wD,0],
+                [x,y,h],[x+wW,y,h],[x+wW,y+wD,h],[x,y+wD,h]
+            ]
+            faces = [
+                [verts[0],verts[1],verts[5],verts[4]],
+                [verts[1],verts[2],verts[6],verts[5]],
+                [verts[2],verts[3],verts[7],verts[6]],
+                [verts[3],verts[0],verts[4],verts[7]],
+                [verts[4],verts[5],verts[6],verts[7]],
+                [verts[0],verts[1],verts[2],verts[3]]
+            ]
+            for f in faces:
+                ax.add_collection3d(Poly3DCollection([f], alpha=0.9, facecolor='#d1d5db', edgecolor=edge_color))
+        
+        # Draw furniture in 3D
+        colors_3d = {
+            'bed': '#3b82f6',
+            'headboard': '#1d4ed8',
+            'wardrobe': '#78350f',
+            'tv_unit': '#4b5563',
+            'dressing_table': '#d946ef',
+            'banquet': '#f97316',
+            'bedside_table_left': '#10b981',
+            'bedside_table_right': '#10b981'
+        }
+
+        for name, item in layout['furniture'].items():
+            if name in colors_3d:
+                x, y = item['x'], item['y']
+                w, d = item['width'], item['depth']
+                h = item.get('height', 500)
+
+                vertices = [
+                    [x, y, 0], [x+w, y, 0], [x+w, y+d, 0], [x, y+d, 0],
+                    [x, y, h], [x+w, y, h], [x+w, y+d, h], [x, y+d, h]
+                ]
+
+                faces = [
+                    [vertices[0], vertices[1], vertices[5], vertices[4]],
+                    [vertices[2], vertices[3], vertices[7], vertices[6]],
+                    [vertices[0], vertices[3], vertices[7], vertices[4]],
+                    [vertices[1], vertices[2], vertices[6], vertices[5]],
+                    [vertices[0], vertices[1], vertices[2], vertices[3]],
+                    [vertices[4], vertices[5], vertices[6], vertices[7]]
+                ]
+
+                for face in faces:
+                    poly = Poly3DCollection([face], alpha=0.8, facecolor=colors_3d[name], edgecolor='#1f2937')
+                    ax.add_collection3d(poly)
+
+        # Set labels and title
+        ax.set_xlabel('Width (mm)', fontsize=11, labelpad=10)
+        ax.set_ylabel('Depth (mm)', fontsize=11, labelpad=10)
+        ax.set_zlabel('Height (mm)', fontsize=11, labelpad=10)
+        ax.set_title('3D View - Interactive (drag to rotate, scroll to zoom)', fontsize=14, pad=20)
+
+        # Set view angle
+        ax.view_init(elev=25, azim=45)
+
+        # Set equal aspect ratio
+        max_dim = max(ext_width, ext_depth, height)
+        ax.set_xlim(0, max_dim)
+        ax.set_ylim(0, max_dim)
+        ax.set_zlim(0, max_dim)
+
+        plt.tight_layout()
+        return fig

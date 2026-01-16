@@ -1,0 +1,420 @@
+RESIDENTIAL SPACE CONSTRAINTS LIBRARY v1.0 (TEXT SPEC FOR SCRIPTING)
+Authoring intent: A deterministic constraint set (hard + soft) for auto-layout + MEP/electrical placement
+Units: millimeters (mm) unless noted. Heights are Z above finished floor (AFFL).
+Coordinate conventions (recommended): 2D plan (x,y). Each object has: footprint polygon, wall-attachment anchor, orientation, height, and clearance buffer.
+This file is designed to be imported into another LLM (e.g., Claude) to implement scripts.
+
+──────────────────────────────────────────────────────────────────────────────
+0) GLOBAL PRINCIPLES
+──────────────────────────────────────────────────────────────────────────────
+
+0.1 Space model (ground-truth)
+Each SPACE has:
+- SpaceID (e.g., BR_01), SpaceType (Bedroom, Living, Kitchen, ...)
+- Boundary polygon (may be rect/concave/curved)
+- WallSegments (ordered) with attributes: is_external, has_window_opening(s), has_door_opening(s)
+- Openings: Door(s), Window(s) with parametric widths/heights/sill, hinge direction for doors
+- Ceiling parameters: ceiling height (default 3000), false ceiling zones (RCP), beams (optional)
+
+Each ITEM has:
+- ItemID (unique and stable)
+- Category (furniture, fixture, appliance, electrical, lighting, HVAC)
+- Footprint geometry (rect / poly / curve) + height
+- Anchor rules (wall-attached, corner-attached, free-standing, ceiling-mounted, floor-mounted)
+- Clearance buffers (hard + soft)
+- Exclusion zones (near doors/windows/required circulation)
+- Param ranges (min/typ/max) for width/depth/height
+
+0.2 Hard vs Soft constraints
+HARD (must never be violated):
+H1 No overlap of footprints (including clearance buffers where defined as hard).
+H2 All items must remain inside the space boundary (item footprint + hard clearance).
+H3 No item may block a door leaf swing zone or door approach zone.
+H4 No item may occupy a window keep-clear zone (defined per space type).
+H5 Minimum circulation widths must be met on all required paths.
+H6 Electrical sockets/switches must be accessible (not hidden behind fixed furniture unless explicitly allowed).
+H7 Wet zones: electrical clearances from wet areas must be respected (bathrooms/kitchens).
+
+SOFT (optimize; can trade-off):
+S1 Preferred alignments (centering, symmetry, axial alignment).
+S2 Preferred viewing angles (TV-to-sofa, bed-to-TV).
+S3 Daylight preference (desks near windows but not blocking).
+S4 Acoustic/privacy preference (avoid bed headboard on noisy external wall if alternatives exist).
+S5 Mechanical preference (AC throw distance and return air path).
+S6 Aesthetic preference (balanced negative space, avoid tight corners).
+
+0.3 Generic keep-clear zones (applies to all spaces)
+- Door Swing Zone: arc/sector from hinge with radius = door leaf width, plus HARD buffer 50.
+- Door Approach Zone (push side): rectangle 600 deep x door width, HARD.
+- Door Approach Zone (pull side): rectangle 300 deep x door width, HARD.
+- Window Keep-Clear Zone: default HARD 300 deep from window plane across window width; increase to 600 for tall items.
+- Window Access Node: if operable, keep HARD 600 wide access node not blocked by fixed furniture.
+
+0.4 Global circulation widths (minimums)
+- Primary path inside a room: HARD ≥ 900
+- Secondary path: HARD ≥ 800
+- Bedside access: HARD ≥ 600 (one side), soft target 700
+- Kitchen working aisle: HARD ≥ 1000 (one-cook) / ≥ 1200 (two-cook)
+- Entry clearance inside any room: HARD ≥ 900 from door opening to first obstruction on main path
+
+0.5 Heights (placement references)
+- Switch/control centerline: 1200
+- Standard socket: 300
+- Bedside socket: 600
+- Dressing/vanity socket: 900
+- Router/data point (entry panel): 2400
+- Wall-mounted TV socket height: centered behind TV (typ 1100–1300), scriptable
+
+0.6 Electrical general rules
+- Provide an entry panel cluster near door latch side (based on hinge direction).
+- Cluster may be vertical or 2-column max; avoid long single horizontal lines.
+- Ensure cluster not obstructed by door swing or furniture.
+- Provide general sockets per room type to avoid extension cords.
+
+0.7 HVAC (split unit) general rules
+- Sizing heuristic (agreed): HP = ceil_to_market(RoomArea_m2 / 10), market set = [1.5, 2.25, 3, 4, 5]
+- Placement: wall-mounted at z≈2400–2600, keep 150 from ceiling, avoid above windows if possible.
+- Maintenance access: keep 600 clear zone in front (soft).
+
+0.8 Lighting + RCP baseline
+- Ambient + task + optional accent.
+- Switch near entry controls ambient.
+- Downlight spacing: 1200–1500 grid, keep 600 from walls.
+- Avoid downlights above TV line (glare) (soft).
+
+0.9 Constraint evaluation (algorithm suggestion)
+- Represent each item as footprint + expanded hard buffer polygon + soft buffer polygon.
+- Generate placements → filter hard constraints → score soft constraints.
+- User edits: apply → test hard constraints → if fail, reject and revert to last valid.
+
+──────────────────────────────────────────────────────────────────────────────
+1) SPACE TYPES LIST
+──────────────────────────────────────────────────────────────────────────────
+ST_01 Bedroom (Master/Standard/Single/Kids)
+ST_02 Living Room
+ST_03 Dining Room / Dining Zone
+ST_04 Kitchen (closed/open, L/U/galley)
+ST_05 Bathroom (full)
+ST_06 Guest WC (powder)
+ST_07 Corridor / Hall / Entry Foyer
+ST_08 Study / Home Office
+ST_09 Laundry / Utility / Storage
+ST_10 Balcony / Terrace
+ST_11 Closet / Dressing Room (walk-in)
+
+──────────────────────────────────────────────────────────────────────────────
+2) ST_01 BEDROOM
+──────────────────────────────────────────────────────────────────────────────
+
+2.1 HARD constraints
+BR-H1 Bed must be wall-attached (headboard side) unless explicitly allowed freestanding.
+BR-H2 Bedside access: at least one side HARD ≥ 600 clear; preferred both sides ≥ 600.
+BR-H3 No furniture in door swing + approach zones.
+BR-H4 No tall furniture in window keep-clear zone: HARD 300; if item height > sill+1200 → HARD 600.
+BR-H5 Primary path door→bed zone and door→wardrobe zone: HARD ≥ 900.
+BR-H6 No overlaps between any items (including headboard, banquette, AC panel).
+BR-H7 TV (if present) must be wall-attached; sockets behind centered; horizontal set for power+data+sat.
+BR-H8 If dressing table exists, chair must have pull-back clearance HARD ≥ 800 behind chair.
+
+2.2 SOFT preferences
+BR-S1 Bed centered on its wall segment; if obstacles exist, center within available band between obstacles (your recenter rule).
+BR-S2 Wardrobe on wall without door and without window; prefer adjacent to bed wall rather than directly facing bed.
+BR-S3 Dressing near TV wall if TV present; otherwise near window but outside keep-clear zone.
+BR-S4 AC above bed centered (your selected default) OR optional alternative wall if user toggles “avoid direct blow”.
+
+2.3 Typical dimensions (param ranges)
+Bed sizes (W x L):
+- Single: 1200 x 1900
+- Double: 1400 x 1900
+- Queen: 1600 x 2000
+- King: 1800 x 2000
+
+Headboard:
+- Thickness [40/80/150], height [800/1200/1600], width offset each side [0/0–100/300]
+
+Bedside table (BST):
+- Depth [300/450/600], length [350/450/800], height [450/500/650]
+
+Wardrobe (built-in):
+- Depth [550/600/700], height [2100/2400/2700], min run length [900/1800/4800]
+
+Dressing table:
+- Depth [350/450/550], length HARD ≥ 800 (typ 1000–1400)
+Chair/stool: ~450 x 450 footprint
+
+Banquette at foot of bed:
+- Depth [350/450/550], height [400/450/500], width = bed width (default), or clamp [0.6*bedW .. bedW]
+
+TV size heuristic (soft):
+- viewing_distance_mm = distance(bed/sofa reference to TV plane)
+- tv_inches ≈ viewing_distance_mm / 25, clamp Bedroom 43–65
+- 16:9 width_mm ≈ 22.1 * inches; height_mm ≈ 12.4 * inches
+
+2.4 Electrical (Bedroom)
+BR-E1 Entry panel cluster near door latch side:
+- Lights switch z=1200
+- Shutters switch z=1200 (if applicable)
+- Smart panel z=1200
+- Heater control z=1200 (if applicable)
+- AC control z=1200
+- One socket z=300
+- Data/router z=2400
+
+BR-E2 Bedside sockets:
+- Each BST: 2 sockets at z=600, near BST centerline on wall behind/adjacent.
+
+BR-E3 TV sockets (if TV):
+- Power + data + satellite, horizontal, centered to TV at z≈1200.
+
+BR-E4 Dressing sockets:
+- Two sockets at z=900 and two at z=300 below table.
+
+BR-E5 General sockets:
+- At least one extra socket at z=300 on a free wall segment.
+
+2.5 HVAC (Bedroom)
+BR-AC1 Split above bed centered; z≈2400.
+BR-AC2 HP = ceil_to_market(area/10), store in BOQ.
+
+2.6 Lighting + RCP (Bedroom)
+BR-L1 Ambient downlights; avoid over TV (glare) (soft).
+BR-L2 Bedhead accent optional (sconces/strip).
+BR-L3 Optional two-way switch: entry + bedside (soft).
+
+──────────────────────────────────────────────────────────────────────────────
+3) ST_02 LIVING ROOM
+──────────────────────────────────────────────────────────────────────────────
+
+3.1 HARD constraints
+LR-H1 Primary circulation path between door(s) and balcony/other doors: HARD ≥ 1000 (min 900).
+LR-H2 Seating must not block door swing/approach zones.
+LR-H3 Window keep-clear: no tall storage within HARD 300 (or 600 if tall).
+LR-H4 TV/media wall must not overlap openings; sockets accessible.
+LR-H5 Coffee table clearance to seating: HARD ≥ 350 (typ 450).
+
+3.2 SOFT preferences
+LR-S1 Align primary sofa to focal point (TV/feature wall).
+LR-S2 Avoid TV directly opposite window glare.
+LR-S3 Conversation distance sofa↔chair 1200–2500.
+LR-S4 Maintain balanced negative space near entry.
+
+3.3 Typical dimensions
+Sofa 3-seat: length [2000/2200/2600], depth [850/950/1100]
+L-sofa: legs 1600–2200, depth 900–1100
+Armchair: 800–950 x 800–950
+Media console: depth 350–450, length 1200–2400
+Coffee table: 600–900 x 1000–1400 or Ø700–900
+
+3.4 Electrical
+LR-E1 Entry cluster (switches z=1200 + socket z=300).
+LR-E2 TV wall: power+data+sat centered; extra sockets at z=300 for console.
+LR-E3 General sockets: at least 2 extra sockets z=300 on free walls.
+
+3.5 HVAC
+LR-AC1 Split on longest throw axis; avoid direct blow to seating.
+LR-AC2 HP by area/10 rounded; if exceeds 5HP, allow 2 splits (soft extension).
+
+3.6 Lighting + RCP
+LR-L1 Ambient downlights + optional cove.
+LR-L2 Task sockets for floor lamps near seating.
+LR-L3 Dimmers optional (soft).
+
+──────────────────────────────────────────────────────────────────────────────
+4) ST_03 DINING ROOM / DINING ZONE
+──────────────────────────────────────────────────────────────────────────────
+
+4.1 HARD constraints
+DR-H1 Chair pull-out clearance: HARD ≥ 900 behind chairs (min 800 compact).
+DR-H2 Keep corridor/kitchen path HARD ≥ 900.
+DR-H3 Buffet/credenza must not block path; keep 900 clear in front.
+
+4.2 SOFT preferences
+DR-S1 Center table to pendant and zone.
+DR-S2 Align buffet to wall without openings.
+
+4.3 Typical dimensions
+Table 6p: 900–1000 x 1600–2000
+Table 8p: 1000–1100 x 2200–2600
+Round 6p: Ø1400–1600
+Chair: 450–550 square footprint
+
+4.4 Electrical
+DR-E1 One socket z=300 near buffet wall.
+DR-E2 Optional data point if used as work zone.
+
+4.5 Lighting + RCP
+DR-L1 Pendant centered above table; hang 750–900 above tabletop.
+DR-L2 Switch near entry/adjacent circulation.
+
+──────────────────────────────────────────────────────────────────────────────
+5) ST_04 KITCHEN
+──────────────────────────────────────────────────────────────────────────────
+
+5.1 HARD constraints
+K-H1 Aisle clearances:
+- One-side working aisle HARD ≥ 1000
+- Facing counters HARD ≥ 1200
+K-H2 Appliance front clearances HARD ≥ 900 (fridge/oven/DW).
+K-H3 No cooktop under operable window (recommended HARD ban).
+K-H4 Counter depth HARD ≥ 600; maintain clear path to door ≥ 900.
+K-H5 Wet electrical: sockets not within 600 of sink edge unless protected.
+
+5.2 SOFT preferences
+K-S1 Sink near window for daylight (without blocking operation).
+K-S2 Fridge near entry.
+K-S3 Landing zones: ≥300 each side of hob; ≥400 near fridge; ≥450 near sink.
+
+5.3 Typical dimensions
+Base cabinet depth 600; tall unit depth 600–650
+Counter height 900
+Upper cabinet depth 350
+Cooktop 600–900, oven 600
+Fridge 700–900 wide
+
+5.4 Electrical
+K-E1 Counter sockets at z=1100–1200; spacing 1200–1500.
+K-E2 Dedicated points: fridge, oven, DW, hood, microwave.
+K-E3 Under-cabinet light switch at z=1200 near entry.
+
+5.5 HVAC
+K-AC1 Hood exhaust required; split AC optional, place away from hob zone.
+
+5.6 Lighting + RCP
+K-L1 Ambient downlights + under-cabinet task strips.
+K-L2 Avoid glare above hob (soft).
+
+──────────────────────────────────────────────────────────────────────────────
+6) ST_05 BATHROOM (Full)
+──────────────────────────────────────────────────────────────────────────────
+
+6.1 HARD constraints
+B-H1 Fixture clearances:
+- WC front HARD ≥ 600; WC centerline to side wall ≥ 400 (typ 450)
+- Vanity front HARD ≥ 700
+- Shower min HARD ≥ 800x800 (typ 900x900)
+B-H2 Door swing must not conflict; if tight, prefer outward or sliding (soft/option).
+B-H3 No sockets in shower zone; protected sockets only near vanity.
+
+6.2 SOFT preferences
+B-S1 Vanity near entry; WC less visible.
+B-S2 Align fixtures on one plumbing wall.
+
+6.3 Typical dimensions
+Vanity depth 450–550, width 600–1200
+Mirror height 600–900 (top ~2000)
+WC zone ~800 wide x 700 deep
+
+6.4 Electrical
+B-E1 Vanity socket protected at z=1100–1200.
+B-E2 Heater isolator/control at z=1200 near entry if present.
+B-E3 Switch near entry (outside wet zone).
+
+6.5 HVAC / Lighting
+B-AC1 Exhaust fan mandatory.
+B-L1 IP-rated downlights + vanity task light.
+
+──────────────────────────────────────────────────────────────────────────────
+7) ST_06 GUEST WC (Powder)
+──────────────────────────────────────────────────────────────────────────────
+Same as bathroom but no shower:
+- WC + small vanity, keep WC front ≥600, vanity front ≥700.
+- Protected vanity socket, entry switch.
+
+──────────────────────────────────────────────────────────────────────────────
+8) ST_07 CORRIDOR / HALL / FOYER
+──────────────────────────────────────────────────────────────────────────────
+
+8.1 HARD constraints
+C-H1 Clear corridor width HARD ≥ 1000 (typ 1100), never <900.
+C-H2 Console depth ≤300 if corridor is narrow; must not reduce clear width below HARD rule.
+
+8.2 Electrical/Lighting
+C-E1 Two-way switching at ends.
+C-E2 General socket z=300 every 6–8 m (soft).
+C-L1 Downlights or wall washers.
+
+──────────────────────────────────────────────────────────────────────────────
+9) ST_08 STUDY / HOME OFFICE
+──────────────────────────────────────────────────────────────────────────────
+
+9.1 HARD constraints
+S-H1 Desk chair clearance behind chair HARD ≥ 900 (min 800).
+S-H2 Desk must not block window operation; keep 300 clear from window plane.
+S-H3 Door swing clear.
+
+9.2 SOFT preferences
+S-S1 Desk near daylight; orient perpendicular to window to reduce glare.
+S-S2 Avoid monitor facing window (glare).
+
+9.3 Typical dimensions
+Desk depth 600–750, width 1200–1800
+Chair footprint 600–700
+Bookcase depth 300–350
+
+9.4 Electrical
+S-E1 Data + power at desk wall (z=300 + optional z=900).
+S-E2 Extra sockets for printer.
+
+9.5 HVAC/Lighting
+S-AC1 Split optional; size area/10.
+S-L1 Task lighting point + entry switch.
+
+──────────────────────────────────────────────────────────────────────────────
+10) ST_09 LAUNDRY / UTILITY / STORAGE
+──────────────────────────────────────────────────────────────────────────────
+
+10.1 HARD constraints
+U-H1 Washer/dryer front clearance HARD ≥ 900.
+U-H2 Protected sockets; avoid splash zones; provide drainage access.
+
+10.2 Typical dimensions
+Washer ~600x600; dryer similar; counter depth 600.
+
+10.3 Electrical/Lighting
+U-E1 Dedicated sockets for washer/dryer; switch at entry.
+U-L1 Ceiling light controlled at entry.
+
+──────────────────────────────────────────────────────────────────────────────
+11) ST_10 BALCONY / TERRACE
+──────────────────────────────────────────────────────────────────────────────
+- Maintain clear egress path ≥900.
+- Weather-rated socket if specified.
+
+──────────────────────────────────────────────────────────────────────────────
+12) ST_11 CLOSET / DRESSING ROOM (Walk-in)
+──────────────────────────────────────────────────────────────────────────────
+
+12.1 HARD constraints
+WIC-H1 Aisle clear between opposing wardrobes HARD ≥ 900 (min 800).
+WIC-H2 Wardrobe depth 600 typical; door swing clear.
+
+12.2 Electrical/Lighting
+WIC-E1 Switch at entry; socket z=300 for accessories/ironing.
+WIC-L1 LED strips/downlights.
+
+──────────────────────────────────────────────────────────────────────────────
+13) IMPLEMENTATION NOTES FOR THE SCRIPT
+──────────────────────────────────────────────────────────────────────────────
+
+13.1 Placement order (recommended)
+1) Detect door/window keep-clear zones.
+2) Place major anchors (largest + functional):
+   - Bedroom: wardrobe → bed → TV → dressing → chair → headboard/banquette → AC
+   - Living: sofa → TV → coffee table → chairs → storage → AC
+   - Kitchen: layout runs + appliances
+   - Bath: shower/bath → WC → vanity
+3) Place electrical points and lighting controls on eligible wall segments.
+4) Validate hard constraints; compute soft score; pick best.
+
+13.2 Overlap checking
+- Rectangles: AABB test; polygons: intersection test.
+- Use hard buffer polygons (clearance).
+- If conflict: reject and revert to last valid.
+
+13.3 Output schema suggestion
+- spaces[] {id, type, boundary, walls[], openings[]}
+- items[] {id, type, footprint, height, anchor, params}
+- mep[] {id, kind, position(x,y,z), host_wall_id, notes}
+- validations[] {hard_ok, violations[], soft_score}
+
+END OF FILE
