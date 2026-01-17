@@ -915,41 +915,82 @@ class BedroomEngine:
             self._add_occupied(occupied, left_strip, 'bed_access')
             self._add_occupied(occupied, right_strip, 'bed_access')
 
-        # Headboard (thin)
-        hb_x, hb_y, hb_w, hb_d = self.place_item_on_wall(bed_wall, self.headboard_width, 50, center=True)
+        # Headboard (anchored to bed head edge)
+        hb_thk = 50.0
+        if bed_wall == 'bottom':
+            hb_x, hb_y, hb_w, hb_d = bed_x, bed_y, bed_w, hb_thk
+        elif bed_wall == 'top':
+            hb_x, hb_y, hb_w, hb_d = bed_x, bed_y + bed_d - hb_thk, bed_w, hb_thk
+        elif bed_wall == 'left':
+            hb_x, hb_y, hb_w, hb_d = bed_x, bed_y, hb_thk, bed_d
+        else:  # right
+            hb_x, hb_y, hb_w, hb_d = bed_x + bed_w - hb_thk, bed_y, hb_thk, bed_d
         headboard = {**self.furniture_specs['headboard'], 'x': hb_x, 'y': hb_y, 'width': hb_w, 'depth': hb_d, 'wall': bed_wall}
         furniture['headboard'] = headboard
         self._add_occupied(occupied, (hb_x, hb_y, hb_w, hb_d), 'headboard')
 
-        # Bedside tables (touch bed, do not violate access strips)
-        if self.bedside_table_count >= 1:
-            if bed_wall in ('top','bottom'):
-                t_rect = (bed_x - self.bedside_table_width, bed_y, self.bedside_table_width, self.bedside_table_depth)
-            else:
-                t_rect = (bed_x, bed_y - self.bedside_table_width, self.bedside_table_depth, self.bedside_table_width)
-            if self._rect_inside_container(t_rect, container) and (not self._collides(t_rect, occupied)):
-                t = {**self.furniture_specs['bedside_table_left'], 'x': t_rect[0], 'y': t_rect[1], 'width': t_rect[2], 'depth': t_rect[3], 'wall': bed_wall}
-                furniture['bedside_table_left'] = t
-                self._add_occupied(occupied, t_rect, 'bedside')
-            else:
-                validation_issues.append('Left bedside table could not be placed without conflicts.')
+        # Bedside tables (HARD RULE: always 1 each side)
+        def _try_place_bedside_tables():
+            placed = {'left': False, 'right': False}
+            # Try shrinking bedside tables if needed (designer behavior)
+            min_w = 350.0
+            min_d = 300.0
+            w0 = float(self.bedside_table_width)
+            d0 = float(self.bedside_table_depth)
+            for tw in [w0, max(min_w, w0-50), max(min_w, w0-100), max(min_w, w0-150)]:
+                for td in [d0, max(min_d, d0-50), max(min_d, d0-100)]:
+                    # clear any previously placed bedside tables for retry
+                    for k in ['bedside_table_left','bedside_table_right']:
+                        if k in furniture:
+                            furniture.pop(k, None)
+                    # remove occupied tagged bedside from occupied list
+                    occupied[:] = [o for o in occupied if o.get('tag') != 'bedside']
+                    placed = {'left': False, 'right': False}
+                    # left
+                    if bed_wall in ('top','bottom'):
+                        tL = (bed_x - tw, bed_y, tw, td)
+                        tR = (bed_x + bed_w, bed_y, tw, td)
+                    else:
+                        tL = (bed_x, bed_y - tw, td, tw)
+                        tR = (bed_x, bed_y + bed_d, td, tw)
+                    if self._rect_inside_container(tL, container) and (not self._collides(tL, occupied)):
+                        furniture['bedside_table_left'] = {**self.furniture_specs['bedside_table_left'], 'x': tL[0], 'y': tL[1], 'width': tL[2], 'depth': tL[3], 'wall': bed_wall}
+                        self._add_occupied(occupied, tL, 'bedside')
+                        placed['left'] = True
+                    if self._rect_inside_container(tR, container) and (not self._collides(tR, occupied)):
+                        furniture['bedside_table_right'] = {**self.furniture_specs['bedside_table_right'], 'x': tR[0], 'y': tR[1], 'width': tR[2], 'depth': tR[3], 'wall': bed_wall}
+                        self._add_occupied(occupied, tR, 'bedside')
+                        placed['right'] = True
+                    if placed['left'] and placed['right']:
+                        # persist the possibly-shrunk dimensions
+                        self.bedside_table_width = float(tw)
+                        self.bedside_table_depth = float(td)
+                        return True
+            return False
+
         if self.bedside_table_count == 2:
+            ok = _try_place_bedside_tables()
+            if not ok:
+                raise Exception('Bedside tables (both sides) cannot be placed without conflicts. Reduce bed size or increase room width.')
+        elif self.bedside_table_count == 1:
+            # still enforce at least one (left)
             if bed_wall in ('top','bottom'):
-                t_rect = (bed_x + bed_w, bed_y, self.bedside_table_width, self.bedside_table_depth)
+                t_rect = (bed_x - float(self.bedside_table_width), bed_y, float(self.bedside_table_width), float(self.bedside_table_depth))
             else:
-                t_rect = (bed_x, bed_y + bed_d, self.bedside_table_depth, self.bedside_table_width)
+                t_rect = (bed_x, bed_y - float(self.bedside_table_width), float(self.bedside_table_depth), float(self.bedside_table_width))
             if self._rect_inside_container(t_rect, container) and (not self._collides(t_rect, occupied)):
-                t = {**self.furniture_specs['bedside_table_right'], 'x': t_rect[0], 'y': t_rect[1], 'width': t_rect[2], 'depth': t_rect[3], 'wall': bed_wall}
-                furniture['bedside_table_right'] = t
+                furniture['bedside_table_left'] = {**self.furniture_specs['bedside_table_left'], 'x': t_rect[0], 'y': t_rect[1], 'width': t_rect[2], 'depth': t_rect[3], 'wall': bed_wall}
                 self._add_occupied(occupied, t_rect, 'bedside')
             else:
-                validation_issues.append('Right bedside table could not be placed without conflicts.')
+                raise Exception('Bedside table cannot be placed without conflicts.')
 
         # --- Wardrobe (mandatory) ---
         # Pick wall preference: opposite bed wall, then other non-window walls.
         opposite = {'top': 'bottom', 'bottom': 'top', 'left': 'right', 'right': 'left'}
-        w_candidates = [opposite.get(bed_wall, 'bottom'), 'left', 'right', 'top', 'bottom']
-        w_candidates = [w for w in w_candidates if w != self.window_wall]
+        bed_facing_wall = opposite.get(bed_wall, 'bottom')
+        # Avoid placing wardrobe on the bed-facing wall (reserved for TV / visual axis).
+        w_candidates = ['left', 'right', 'top', 'bottom']
+        w_candidates = [w for w in w_candidates if w not in (self.window_wall, bed_facing_wall)]
 
         # Normalize wardrobe config
         config = (self.wardrobe_config or 'auto').lower().strip()
@@ -1145,16 +1186,75 @@ class BedroomEngine:
         if float(current_wardrobe_width) != float(self.wardrobe_width):
             validation_issues.append(f'Wardrobe width was reduced from {int(self.wardrobe_width)}mm to {int(current_wardrobe_width)}mm to avoid conflicts.')
 
-        # --- TV + Dressing table (optional, non-failing) ---
-        # Place TV on opposite of bed wall when possible, otherwise skip.
-        tv_wall = opposite.get(bed_wall, 'bottom')
-        if self.include_tv and tv_wall != self.window_wall:
+        # --- TV + Dressing table (optional, but TV follows strict axis rules) ---
+        # TV rule:
+        # 1) Default: center TV on the bed-facing wall (visual axis).
+        # 2) If the bed-facing wall IS the window wall, try to place TV on:
+        #    (a) window wall BESIDE the window (clear segment), else
+        #    (b) best alternate wall (non-door, non-bed wall) with enough clear length.
+        bed_facing_wall = opposite.get(bed_wall, 'bottom')
+        if self.include_tv:
             tv_along = float(self.tv_unit_width)
             tv_into = 250.0
-            wall = self.get_wall_info(tv_wall)
-            if tv_along <= wall['length']:
-                off = (wall['length'] - tv_along) / 2
-                x, y, w, d = self.place_item_on_wall(tv_wall, tv_along, tv_into, offset_from_start=off, center=False)
+
+            def _largest_clear_interval_on_wall(wall_name, buf=200.0):
+                wall = self.get_wall_info(wall_name)
+                intervals = [(0.0, float(wall['length']))]
+                # subtract door span
+                if door['wall'] == wall_name:
+                    if wall_name in ('top','bottom'):
+                        a = float(door['x']) - ext - buf
+                        b = a + float(self.door_width) + 2*buf
+                    else:
+                        a = float(door['y']) - ext - buf
+                        b = a + float(self.door_width) + 2*buf
+                    intervals = _subtract_interval(intervals, (max(0.0, a), min(float(wall['length']), b)))
+                # subtract window span (we still allow beside-window placement)
+                if window['wall'] == wall_name:
+                    if wall_name in ('top','bottom'):
+                        a = float(window['x']) - ext - buf
+                        b = a + float(self.window_width) + 2*buf
+                    else:
+                        a = float(window['y']) - ext - buf
+                        b = a + float(self.window_width) + 2*buf
+                    intervals = _subtract_interval(intervals, (max(0.0, a), min(float(wall['length']), b)))
+                intervals = sorted(intervals, key=lambda ab: (ab[1]-ab[0]), reverse=True)
+                return intervals[0] if intervals else None
+
+            tv_wall = bed_facing_wall
+            tv_offset = None
+
+            # Case A: ideal axis wall is NOT the window wall
+            if tv_wall != self.window_wall:
+                wall = self.get_wall_info(tv_wall)
+                if tv_along <= float(wall['length']):
+                    tv_offset = (float(wall['length']) - tv_along) / 2.0
+
+            # Case B: bed faces the window wall → try to place TV BESIDE the window on same wall
+            if tv_offset is None and bed_facing_wall == self.window_wall:
+                best = _largest_clear_interval_on_wall(self.window_wall, buf=250.0)
+                if best and (best[1]-best[0]) >= tv_along:
+                    tv_wall = self.window_wall
+                    tv_offset = best[0] + (best[1]-best[0]-tv_along)/2.0
+
+            # Case C: fallback alternate wall (prefer non-door wall)
+            if tv_offset is None:
+                candidates = ['left','right','top','bottom']
+                # remove bed wall and (if possible) door wall
+                candidates = [w for w in candidates if w != bed_wall]
+                ordered = [w for w in candidates if w != self.door_wall] + [w for w in candidates if w == self.door_wall]
+                for cand in ordered:
+                    if cand == self.window_wall:
+                        continue
+                    wall = self.get_wall_info(cand)
+                    if tv_along <= float(wall['length']):
+                        tv_wall = cand
+                        tv_offset = (float(wall['length']) - tv_along) / 2.0
+                        break
+
+            # Place if we found a valid wall+offset
+            if tv_offset is not None:
+                x, y, w, d = self.place_item_on_wall(tv_wall, tv_along, tv_into, offset_from_start=tv_offset, center=False)
                 rect = (x, y, w, d)
                 if self._rect_inside_container(rect, container) and (not self._collides(rect, occupied)):
                     tv = {**self.furniture_specs['tv_unit'], 'x': x, 'y': y, 'width': w, 'depth': d, 'wall': tv_wall}
@@ -1162,8 +1262,9 @@ class BedroomEngine:
                     tv['mount_z'] = self._recommended_tv_center_z() - float(tv.get('height', 600)) / 2
                     furniture['tv_unit'] = tv
                     self._add_occupied(occupied, rect, 'tv_unit')
-
-        # Dressing table: try next to TV along same wall, else skip
+                else:
+                    validation_issues.append('TV could not be placed on the required wall axis without conflicts.')
+# Dressing table: try next to TV along same wall, else skip
         if self.include_dressing_table and 'tv_unit' in furniture:
             dt_along = float(self.dressing_table_width)
             dt_into = 500.0
@@ -2144,7 +2245,7 @@ class BedroomEngine:
                 w['width'],
                 w['depth'],
                 linewidth=0,
-                facecolor='#d1d5db',
+                facecolor=wall_color,
                 alpha=0.9,
                 zorder=2
             )
@@ -2308,16 +2409,21 @@ class BedroomEngine:
             win_h = float(self.window_height)
 
             fig = go.Figure()
-
             def add_box(x, y, z, w, d, h, color, opacity=1.0, name=None):
-                # 8 vertices of the box
-                X = [x, x+w, x+w, x, x, x+w, x+w, x]
-                Y = [y, y, y+d, y+d, y, y, y+d, y+d]
-                Z = [z, z, z, z, z+h, z+h, z+h, z+h]
-                # 12 triangles (two per face)
-                I = [0, 0, 0, 1, 1, 2, 4, 4, 4, 5, 5, 6]
-                J = [1, 2, 3, 2, 5, 3, 5, 6, 7, 6, 1, 7]
-                K = [2, 3, 1, 5, 2, 6, 6, 7, 5, 1, 4, 3]
+                # Robust cube triangulation (prevents broken Mesh3d surfaces)
+                X = [x, x+w, x+w, x,   x, x+w, x+w, x]
+                Y = [y, y,   y+d, y+d, y, y,   y+d, y+d]
+                Z = [z, z,   z,   z,   z+h, z+h, z+h, z+h]
+                # 12 triangles (2 per face)
+                faces = [
+                    (0,1,2),(0,2,3),  # bottom
+                    (4,5,6),(4,6,7),  # top
+                    (0,1,5),(0,5,4),  # front
+                    (1,2,6),(1,6,5),  # right
+                    (2,3,7),(2,7,6),  # back
+                    (3,0,4),(3,4,7)   # left
+                ]
+                I=[a for a,_,_ in faces]; J=[b for _,b,_ in faces]; K=[c for *_,c in faces]
                 fig.add_trace(go.Mesh3d(
                     x=X, y=Y, z=Z,
                     i=I, j=J, k=K,
@@ -2402,7 +2508,7 @@ class BedroomEngine:
 
             # Wardrobe enclosure return walls
             for w in layout['walls'].get('wardrobe_enclosure', []):
-                add_box(float(w['x']), float(w['y']), 0, float(w['width']), float(w['depth']), H, '#d1d5db', 1.0, 'wardrobe_wall')
+                add_box(float(w['x']), float(w['y']), 0, float(w['width']), float(w['depth']), H, wall_color, 1.0, 'wardrobe_wall')
 
             # Furniture masses (simple BIM blocks)
             for name, item in layout['furniture'].items():
@@ -2535,7 +2641,7 @@ class BedroomEngine:
                 [verts[0],verts[1],verts[2],verts[3]]
             ]
             for f in faces:
-                ax.add_collection3d(Poly3DCollection([f], alpha=0.9, facecolor='#d1d5db', edgecolor=edge_color))
+                ax.add_collection3d(Poly3DCollection([f], alpha=0.9, facecolor=wall_color, edgecolor=edge_color))
         
         # Draw furniture in 3D
         colors_3d = {

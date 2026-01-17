@@ -494,8 +494,8 @@ if generate_btn or st.session_state.layout:
             room = st.session_state.layout['room']
             
             st.metric("Room Area", f"{room['area_m2']:.2f} m²")
-            st.metric("TV Size", f"{metadata['tv_size']}\"")
-            st.metric("Viewing Distance", f"{int(metadata['viewing_distance'])}mm")
+            st.metric("TV Size", f"{metadata.get('tv_size','N/A')}\"")
+            st.metric("Viewing Distance", f"{int(metadata.get('viewing_distance',0))}mm")
             
             st.markdown("**Dimensions:**")
             st.write(f"Internal: {room['internal_width']} x {room['internal_depth']} mm")
@@ -505,12 +505,12 @@ if generate_btn or st.session_state.layout:
             st.write(f"• Bed on {st.session_state.layout['architectural']['bed_wall']['type']} wall")
             st.write(f"• Window on {metadata['window_wall']} wall")
             st.write(f"• Wardrobe mode: {metadata.get('wardrobe_mode','').replace('_',' ').title()}")
-            st.write(f"• Bedside tables: {metadata['bedside_table_count']}")
+            st.write(f"• Bedside tables: {metadata.get('bedside_table_count','N/A')}")
             st.write(f"• Banquet included: {'Yes' if metadata['include_banquet'] else 'No'}")
             
-            if metadata['validation_issues']:
+            if metadata.get('validation_issues'):
                 with st.expander("⚠️ Issues", expanded=True):
-                    for issue in metadata['validation_issues']:
+                    for issue in metadata.get('validation_issues', []):
                         st.warning(issue)
     
     # Tab 2: 3D View
@@ -521,7 +521,7 @@ if generate_btn or st.session_state.layout:
 
         # Prefer Plotly for true 360° orbit. Fall back to matplotlib if Plotly is unavailable.
         if hasattr(fig_3d, "to_dict") and hasattr(fig_3d, "update_layout"):
-            st.plotly_chart(fig_3d, use_container_width=True)
+            st.plotly_chart(fig_3d, use_container_width=True, config={'scrollZoom': True, 'displaylogo': False})
             st.info("360° Orbit: left-drag rotate (orbit), scroll to zoom, right-drag pan")
         else:
             st.pyplot(fig_3d)
@@ -683,11 +683,14 @@ if generate_btn or st.session_state.layout:
         
         st.markdown("#### 📋 Layout Summary")
         
-        metadata = st.session_state.layout['metadata']
-        
+        metadata = st.session_state.layout.get('metadata', {})
+
+        room_id = metadata.get('room_id') or metadata.get('project_id') or st.session_state.layout.get('room', {}).get('id', 'N/A')
+        generated_at = metadata.get('generated_at', 'N/A')
+
         summary = f"""
-        **Project ID:** {metadata['room_id']}
-        **Generated:** {metadata['generated_at']}
+        **Project ID:** {room_id}
+        **Generated:** {generated_at}
         
         **Room Configuration:**
         - Internal Dimensions: {st.session_state.layout['room']['internal_width']} x {st.session_state.layout['room']['internal_depth']} mm
@@ -696,23 +699,23 @@ if generate_btn or st.session_state.layout:
         - Area: {st.session_state.layout['room']['area_m2']} m²
         
         **Design Details:**
-        - TV Size: {metadata['tv_size']}"
-        - Viewing Distance: {int(metadata['viewing_distance'])} mm
-        - Bed Wall: {metadata['bed_wall'].title()}
-        - Wardrobe Wall: {metadata['wardrobe_wall'].title()}
-        - Window Wall: {metadata['window_wall'].title()}
-        - Door Wall: {metadata['door_wall'].title()}
-        - Bedside Tables: {metadata['bedside_table_count']}
-        - Banquet Included: {'Yes' if metadata['include_banquet'] else 'No'}
+        - TV Size: {metadata.get('tv_size','N/A')}
+        - Viewing Distance: {int(metadata.get('viewing_distance',0))} mm
+        - Bed Wall: {str(metadata.get('bed_wall','N/A')).title()}
+        - Wardrobe Wall: {str(metadata.get('wardrobe_wall','N/A')).title()}
+        - Window Wall: {str(metadata.get('window_wall','N/A')).title()}
+        - Door Wall: {str(metadata.get('door_wall','N/A')).title()}
+        - Bedside Tables: {metadata.get('bedside_table_count','N/A')}
+        - Banquet Included: {'Yes' if metadata.get('include_banquet', False) else 'No'}
         
         **BOQ Total:** ${st.session_state.layout['boq']['total_cost']:,.2f}
         """
         
         st.markdown(summary)
         
-        if metadata['validation_issues']:
+        if metadata.get('validation_issues'):
             st.warning("⚠️ Validation Issues:")
-            for issue in metadata['validation_issues']:
+            for issue in metadata.get('validation_issues', []):
                 st.write(f"- {issue}")
 
 else:
