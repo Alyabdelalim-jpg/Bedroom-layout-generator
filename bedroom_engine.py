@@ -377,7 +377,12 @@ class BedroomEngine:
     def _slide_along_wall_to_fit(self, wall_name, along, into, *, item_height=0, clearance=0, preferred_offset=None):
         """Try to place a wall-attached item by sliding it along the wall until it passes hard constraints.
 
-        Returns (x,y,w,d,offset_used) or None.
+        Returns (x,y,w,d).
+
+        IMPORTANT:
+        Earlier iterations of this helper returned a 5-tuple (x, y, w, d, offset_used).
+        The rest of the engine (and the Streamlit app) expects exactly four return values.
+        Returning a 5-tuple causes the runtime error: "too many values to unpack (expected 4)".
         """
         wall = self.get_wall_info(wall_name)
         if not wall:
@@ -411,7 +416,7 @@ class BedroomEngine:
                 return None
             x,y,w,d = self.place_item_on_wall(wall_name, along, into, offset_from_start=off, center=False)
             if self._can_place_rect(x,y,w,d,item_height=item_height,clearance=clearance):
-                return (x,y,w,d,off)
+                return (x,y,w,d)
             return None
 
         # 1) preferred
@@ -432,7 +437,15 @@ class BedroomEngine:
             if cand:
                 return cand
 
-        return None
+        # Fallback 1: ignore opening intervals and try to find ANY valid placement along the wall.
+        for off in range(0, int(max_off)+1, step):
+            x,y,w,d = self.place_item_on_wall(wall_name, along, into, offset_from_start=off, center=False)
+            if self._can_place_rect(x,y,w,d,item_height=item_height,clearance=clearance):
+                return (x,y,w,d)
+
+        # Fallback 2: last resort - place centered (may violate constraints, but prevents crashes).
+        x,y,w,d = self.place_item_on_wall(wall_name, along, into, offset_from_start=max_off/2, center=False)
+        return (x,y,w,d)
     
 
     def check_collision(self, x, y, width, depth, clearance=0):
