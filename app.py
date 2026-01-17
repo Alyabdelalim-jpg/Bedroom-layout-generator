@@ -119,6 +119,23 @@ with st.sidebar:
             st.session_state.sidebar_expand_all = False
 
     st.markdown("### ⚙️ Input Method")
+
+    # ---- Persistent UI defaults (enables automatic "revert" when inputs are invalid) ----
+    _defaults = {
+        'wardrobe_width': 1800,
+        'wardrobe_depth': 600,
+        'tv_unit_width': 1200,
+        'include_tv': True,
+        'include_dressing_table': True,
+        'dressing_table_width': 1200,
+        'include_dresser': False,
+        'dresser_width': 1200,
+        'dresser_depth': 500,
+        'include_chair': True,
+    }
+    for _k, _v in _defaults.items():
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
     
     input_method = st.radio("Choose input method:", 
                            ["Manual Parameters", "Upload DXF (Coming Soon)"], 
@@ -172,11 +189,21 @@ with st.sidebar:
                     "Under-window option (600–900mm sill)",
                     ["none", "bench", "study_table"],
                     index=0,
-                    help="Bench OR study table is allowed when sill is 600–900mm. Study table will face the window."
+                    help="Bench OR study table is allowed when sill is 600–900mm. Study table will face the window (desk against window wall)."
                 )
             else:
                 st.info("Sill outside typical range → keeping window wall clear for safety.")
                 under_window_use = 'none'
+
+            # Optional chair (only meaningful when a study table exists)
+            if under_window_use == 'study_table':
+                include_chair = st.checkbox(
+                    "Include chair (if desk is used)",
+                    value=bool(st.session_state.include_chair),
+                    key='include_chair'
+                )
+            else:
+                include_chair = False
 
         with st.expander("🛏️ Bed group", expanded=st.session_state.sidebar_expand_all):
             bed_type = st.selectbox("Bed Size", [
@@ -207,15 +234,36 @@ with st.sidebar:
             with col2:
                 headboard_height = st.number_input("Headboard Height (mm)", 800, 1500, 1000, 50)
 
-            with st.expander("Bedside table dimensions", expanded=False):
+            # NOTE: Streamlit does not allow nested expanders.
+            # Use an "Advanced" toggle instead of an expander inside an expander.
+            bedside_width = 500
+            bedside_depth = 400
+            show_bedside_adv = st.checkbox("Advanced: bedside table dimensions", value=False)
+            if show_bedside_adv:
                 col1, col2 = st.columns(2)
                 with col1:
-                    bedside_width = st.number_input("Width (mm)", 300, 800, 500, 50)
+                    bedside_width = st.number_input("Bedside Width (mm)", 300, 800, 500, 50)
                 with col2:
-                    bedside_depth = st.number_input("Depth (mm)", 300, 600, 400, 50)
+                    bedside_depth = st.number_input("Bedside Depth (mm)", 300, 600, 400, 50)
 
         with st.expander("🗄️ Wardrobe", expanded=st.session_state.sidebar_expand_all):
-            wardrobe_width = st.number_input("Wardrobe Width (mm)", 1200, 4000, 1800, 100)
+            colw1, colw2 = st.columns(2)
+            with colw1:
+                wardrobe_width = st.number_input(
+                    "Wardrobe Width (mm)",
+                    1200, 4000,
+                    int(st.session_state.wardrobe_width),
+                    100,
+                    key='wardrobe_width'
+                )
+            with colw2:
+                wardrobe_depth = st.number_input(
+                    "Wardrobe Depth (mm)",
+                    450, 800,
+                    int(st.session_state.wardrobe_depth),
+                    50,
+                    key='wardrobe_depth'
+                )
 
             wardrobe_config_label = st.selectbox(
                 "Wardrobe configuration",
@@ -225,7 +273,7 @@ with st.sidebar:
                     "W-3 Built-in (return wall)",
                 ],
                 index=0,
-                help="W-1: centered on wall. W-2: spans entire wall if no door/window conflicts. W-3: built-in wardrobe with a 600mm return wall (120mm thick) placed to avoid the door arc."
+                help="W-1: centered on clear wall segment. W-2: spans entire wall if no door/window conflicts. W-3: built-in (surrounded by walls) with a 600mm return wall (120mm thick) placed to avoid the door arc."
             )
 
             wardrobe_config = {
@@ -236,11 +284,62 @@ with st.sidebar:
 
             wardrobe_type = "built_in" if wardrobe_config == "built_in" else "freestanding"
             wardrobe_return_wall_enabled = wardrobe_config == "built_in"
+            wardrobe_allow_fallback = st.checkbox(
+                "Allow fallback if built-in fails (recommended)",
+                value=True
+            )
 
-        with st.expander("📺 TV + Dressing", expanded=st.session_state.sidebar_expand_all):
-            tv_unit_width = st.number_input("TV Unit Width (mm)", 800, 2000, 1200, 100)
-            dressing_table_width = st.number_input("Dressing Table Width (mm)", 800, 2000, 1200, 100)
-            dressing_table_side = st.radio("Dressing Table Side", ["Right of TV", "Left of TV"])
+        with st.expander("📺 TV + Dressing + Dresser", expanded=st.session_state.sidebar_expand_all):
+            include_tv = st.checkbox("Include TV + TV Unit (auto TV size)", value=bool(st.session_state.include_tv), key='include_tv')
+            tv_unit_width = st.number_input(
+                "TV Unit Width (mm)",
+                800, 2000,
+                int(st.session_state.tv_unit_width),
+                100,
+                key='tv_unit_width',
+                disabled=not include_tv
+            )
+
+            include_dressing_table = st.checkbox(
+                "Include Dressing Table",
+                value=bool(st.session_state.include_dressing_table),
+                key='include_dressing_table',
+                disabled=not include_tv
+            )
+            dressing_table_width = st.number_input(
+                "Dressing Table Width (mm)",
+                800, 2000,
+                int(st.session_state.dressing_table_width),
+                100,
+                key='dressing_table_width',
+                disabled=(not include_tv or not include_dressing_table)
+            )
+            dressing_table_side = st.radio(
+                "Dressing Table Side",
+                ["Right of TV", "Left of TV"],
+                disabled=(not include_tv or not include_dressing_table)
+            )
+
+            include_dresser = st.checkbox("Include Dresser (low storage)", value=bool(st.session_state.include_dresser), key='include_dresser')
+            cold1, cold2 = st.columns(2)
+            with cold1:
+                    dresser_width = st.number_input(
+                        "Dresser Width (mm)",
+                        800, 2000,
+                        int(st.session_state.dresser_width),
+                        100,
+                        key='dresser_width',
+                        disabled=not include_dresser
+                    )
+            with cold2:
+                    dresser_depth = st.number_input(
+                        "Dresser Depth (mm)",
+                        350, 700,
+                        int(st.session_state.dresser_depth),
+                        50,
+                        key='dresser_depth',
+                        disabled=not include_dresser
+                    )
 
         if include_banquet:
             with st.expander("🪑 Banquet", expanded=False):
@@ -321,7 +420,15 @@ if generate_btn or st.session_state.layout:
                     wardrobe_type=wardrobe_type,
                     wardrobe_config=wardrobe_config,
                     wardrobe_return_wall_enabled=wardrobe_return_wall_enabled,
+                    wardrobe_allow_fallback=wardrobe_allow_fallback,
                     wardrobe_width=wardrobe_width,
+                    wardrobe_depth=wardrobe_depth,
+                    include_tv=include_tv,
+                    include_dressing_table=include_dressing_table,
+                    include_dresser=include_dresser,
+                    dresser_width=dresser_width if include_dresser else 1200,
+                    dresser_depth=dresser_depth if include_dresser else 500,
+                    include_chair=include_chair,
                     tv_unit_width=tv_unit_width,
                     dressing_table_width=dressing_table_width,
                     bedside_table_count=bedside_table_count,
@@ -344,6 +451,27 @@ if generate_btn or st.session_state.layout:
                 st.session_state.engine = engine
                 
                 st.success(f"✅ Design generated! Room ID: {layout['room']['id']}")
+
+                # --- Validation + auto-revert (when engine corrects the user inputs) ---
+                issues = layout.get('metadata', {}).get('validation_issues', []) or []
+                if issues:
+                    # Show all reasons
+                    st.warning("Some inputs were adjusted or some items were skipped to respect rules:")
+                    for msg in issues:
+                        st.write(f"• {msg}")
+
+                    # Auto-update wardrobe width if engine reduced it
+                    for msg in issues:
+                        if "Wardrobe width was reduced" in msg:
+                            try:
+                                # Example: "Wardrobe width was reduced from 2400mm to 1800mm ..."
+                                parts = msg.replace('mm', '').split()
+                                old_w = int(parts[5])
+                                new_w = int(parts[7])
+                                st.session_state['wardrobe_width'] = new_w
+                                st.toast(f"Wardrobe width reverted from {old_w}mm to {new_w}mm to avoid conflicts.")
+                            except Exception:
+                                pass
                 
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")

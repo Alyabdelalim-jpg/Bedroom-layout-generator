@@ -44,6 +44,7 @@ class BedroomEngine:
                  wardrobe_return_wall_enabled=True,
                  wardrobe_return_wall_side_preference='auto',  # auto | left | right
                  wardrobe_width=1800,
+                 wardrobe_depth=600,
                  tv_unit_width=1200,
                  dressing_table_width=1200,
                  bedside_table_count=2,
@@ -54,6 +55,13 @@ class BedroomEngine:
                  include_banquet=True,
                  banquet_width=1400,
                  banquet_depth=500,
+                 # Optional furniture toggles (UI-controlled)
+                 include_tv=True,
+                 include_dressing_table=True,
+                 include_dresser=False,
+                 dresser_width=1200,
+                 dresser_depth=500,
+                 include_chair=True,
                  ac_type='split',
                  lighting_type='recessed',
                  include_electrical=True,
@@ -113,8 +121,20 @@ class BedroomEngine:
         # Furniture configuration
         self.bedside_table_count = min(bedside_table_count, 2)
         self.include_banquet = include_banquet
+
+        # Optional furniture toggles + dimensions
+        self.include_tv = bool(include_tv)
+        self.include_dressing_table = bool(include_dressing_table)
+        self.include_dresser = bool(include_dresser)
+        self.dresser_width = float(dresser_width)
+        self.dresser_depth = float(dresser_depth)
+        self.include_chair = bool(include_chair)
         # Wardrobe mode: free / enclosed / walkin_l / walkin_u / auto
         self.wardrobe_mode = wardrobe_mode
+
+        # Wardrobe dimensions
+        self.wardrobe_width = float(wardrobe_width)
+        self.wardrobe_depth = float(wardrobe_depth)
         
         # Systems
         self.ac_type = ac_type
@@ -778,6 +798,30 @@ class BedroomEngine:
                     furniture['study_table'] = desk
                     self._add_occupied(occupied, rect, 'study_table')
                     self._add_occupied(occupied, chair, 'chair_pullback')
+
+                    # Optional: add an actual chair object for 2D/3D (footprint placed within the pullback zone)
+                    if getattr(self, 'include_chair', False):
+                        chair_size = 500.0
+                        cx, cy, cw, cd = chair
+                        # Center a square chair footprint within the pullback rectangle
+                        chair_rect = (
+                            cx + max(0.0, (cw - chair_size) / 2),
+                            cy + max(0.0, (cd - chair_size) / 2),
+                            min(chair_size, cw),
+                            min(chair_size, cd)
+                        )
+                        if self._rect_inside_container(chair_rect, container) and (not self._collides(chair_rect, occupied)):
+                            chair_item = {
+                                'id': f'FUR-{self.room_id}-CHAIR',
+                                'name': 'chair',
+                                'x': chair_rect[0], 'y': chair_rect[1],
+                                'width': chair_rect[2], 'depth': chair_rect[3],
+                                'height': 900,
+                                'material': 'Upholstered',
+                                'unit_cost': 120
+                            }
+                            furniture['chair'] = chair_item
+                            self._add_occupied(occupied, chair_rect, 'chair')
                 else:
                     validation_issues.append('Study table under window could not be placed without conflicts; keeping window clear.')
                     allowed_use = 'none'
@@ -914,7 +958,7 @@ class BedroomEngine:
         if config == 'built_in' and self.wardrobe_type != 'built_in':
             config = 'centered'
 
-        wardrobe_depth = 600.0
+        wardrobe_depth = float(getattr(self, 'wardrobe_depth', 600.0))
         access = float(self.clearances.get('wardrobe_access', 900))
         placed_wardrobe = False
         wardrobe_wall = None
@@ -1104,7 +1148,7 @@ class BedroomEngine:
         # --- TV + Dressing table (optional, non-failing) ---
         # Place TV on opposite of bed wall when possible, otherwise skip.
         tv_wall = opposite.get(bed_wall, 'bottom')
-        if tv_wall != self.window_wall:
+        if self.include_tv and tv_wall != self.window_wall:
             tv_along = float(self.tv_unit_width)
             tv_into = 250.0
             wall = self.get_wall_info(tv_wall)
@@ -1120,7 +1164,7 @@ class BedroomEngine:
                     self._add_occupied(occupied, rect, 'tv_unit')
 
         # Dressing table: try next to TV along same wall, else skip
-        if 'tv_unit' in furniture:
+        if self.include_dressing_table and 'tv_unit' in furniture:
             dt_along = float(self.dressing_table_width)
             dt_into = 500.0
             wall = furniture['tv_unit']['wall']
@@ -1146,6 +1190,38 @@ class BedroomEngine:
                     dt = {**self.furniture_specs['dressing_table'], 'x': rect[0], 'y': rect[1], 'width': rect[2], 'depth': rect[3], 'wall': wall}
                     furniture['dressing_table'] = dt
                     self._add_occupied(occupied, rect, 'dressing_table')
+
+        # --- Dresser (optional, non-failing) ---
+        # Simple low storage placed on the best remaining non-window wall.
+        if self.include_dresser:
+            dresser_w = float(self.dresser_width)
+            dresser_d = float(self.dresser_depth)
+            # candidate walls: avoid bed wall, window wall, and TV wall if used
+            avoid = {bed_wall, self.window_wall}
+            if 'tv_unit' in furniture:
+                avoid.add(furniture['tv_unit'].get('wall'))
+            wall_order = ['top','bottom','left','right']
+            for wname in wall_order:
+                if wname in avoid:
+                    continue
+                wall_info = self.get_wall_info(wname)
+                if dresser_w > float(wall_info['length']):
+                    continue
+                off = (float(wall_info['length']) - dresser_w) / 2
+                x, y, w, d = self.place_item_on_wall(wname, dresser_w, dresser_d, offset_from_start=off, center=False)
+                rect = (x, y, w, d)
+                if self._rect_inside_container(rect, container) and (not self._collides(rect, occupied)):
+                    dr = {
+                        'id': f'FUR-{self.room_id}-DRESSER',
+                        'name': 'dresser',
+                        'x': x, 'y': y, 'width': w, 'depth': d,
+                        'height': 900,
+                        'material': 'MDF',
+                        'unit_cost': 350
+                    }
+                    furniture['dresser'] = dr
+                    self._add_occupied(occupied, rect, 'dresser')
+                    break
 
         # --- Metadata and output ---
         room = {
