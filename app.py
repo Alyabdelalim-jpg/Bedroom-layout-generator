@@ -106,6 +106,18 @@ st.markdown("""
 
 # Sidebar - UPDATED
 with st.sidebar:
+    # Sidebar global expand/collapse (applies to all expanders)
+    if 'sidebar_expand_all' not in st.session_state:
+        st.session_state.sidebar_expand_all = True
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Expand all", use_container_width=True):
+            st.session_state.sidebar_expand_all = True
+    with col_b:
+        if st.button("Collapse all", use_container_width=True):
+            st.session_state.sidebar_expand_all = False
+
     st.markdown("### ⚙️ Input Method")
     
     input_method = st.radio("Choose input method:", 
@@ -119,18 +131,17 @@ with st.sidebar:
     st.markdown("---")
     
     if input_method == "Manual Parameters":
-        st.markdown("### 📐 Room Dimensions")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            width = st.number_input("Width (mm) - Internal", 2000, 10000, 3900, 100)
-        with col2:
-            depth = st.number_input("Depth (mm) - Internal", 2000, 10000, 3600, 100)
-        
-        height = st.number_input("Height (mm)", 2400, 5000, 3000, 100)
-        
-        # --- Doors & Windows (categorized) ---
-        with st.expander("🚪 Doors", expanded=True):
+        with st.expander("📐 Room", expanded=st.session_state.sidebar_expand_all):
+            col1, col2 = st.columns(2)
+            with col1:
+                width = st.number_input("Width (mm) - Internal", 2000, 10000, 3900, 100)
+            with col2:
+                depth = st.number_input("Depth (mm) - Internal", 2000, 10000, 3600, 100)
+
+            height = st.number_input("Height (mm)", 2400, 5000, 3000, 100)
+
+        # --- Doors & Windows ---
+        with st.expander("🚪 Doors", expanded=st.session_state.sidebar_expand_all):
             door_wall = st.selectbox("Door Wall", ["top", "bottom", "left", "right"], index=0)
             door_from_wall = st.number_input("Door offset from corner (mm)", 0, int(max(0, min(width, depth) - 600)), 200, 50)
             door_width = st.number_input("Door Width (mm)", 600, 1200, 900, 50)
@@ -140,84 +151,107 @@ with st.sidebar:
             with col_d2:
                 door_swing = st.selectbox("Swing", ["inward", "outward"], index=0)
 
-        with st.expander("🪟 Windows", expanded=True):
+        with st.expander("🪟 Windows", expanded=st.session_state.sidebar_expand_all):
             window_wall = st.selectbox("Window Wall", ["right", "left", "bottom", "top"], index=0)
             window_width = st.number_input("Window Width (mm)", 800, 3000, 1800, 100)
             window_sill = st.number_input("Window Sill (mm)", 200, 1200, 300, 50)
 
-        st.markdown("### 🛏️ Bed Configuration")
-        
-        bed_type = st.selectbox("Bed Size", 
-                               ["King (1800x2000)", "Queen (1600x2000)", 
-                                "Double (1400x1900)", "Single (1200x1900)"])
+            # Under-window options based on sill height rules
+            if window_sill < 450:
+                st.info("Sill < 450mm → keep window wall clear (no bench/desk).")
+                under_window_use = 'none'
+            elif 450 <= window_sill < 600:
+                under_window_use = st.selectbox(
+                    "Under-window option (450–600mm sill)",
+                    ["none", "bench"],
+                    index=0,
+                    help="Bench is allowed below window when sill is 450–600mm."
+                )
+            elif 600 <= window_sill <= 900:
+                under_window_use = st.selectbox(
+                    "Under-window option (600–900mm sill)",
+                    ["none", "bench", "study_table"],
+                    index=0,
+                    help="Bench OR study table is allowed when sill is 600–900mm. Study table will face the window."
+                )
+            else:
+                st.info("Sill outside typical range → keeping window wall clear for safety.")
+                under_window_use = 'none'
 
-        bed_wall_label = st.selectbox(
-            "Bed Wall (Anchoring)",
-            ["Auto", "Top", "Bottom", "Left", "Right"],
-            index=0,
-            help="Forces the bed group to anchor to the selected wall (cannot be the window wall)."
-        )
+        with st.expander("🛏️ Bed group", expanded=st.session_state.sidebar_expand_all):
+            bed_type = st.selectbox("Bed Size", [
+                "King (1800x2000)", "Queen (1600x2000)", "Double (1400x1900)", "Single (1200x1900)"
+            ])
 
-        bed_wall_preference = {
-            "Auto": "auto",
-            "Top": "top",
-            "Bottom": "bottom",
-            "Left": "left",
-            "Right": "right",
-        }[bed_wall_label]
-        
-        # New bed configuration options
-        bedside_table_count = st.slider("Bedside Tables", 0, 2, 2)
-        include_banquet = st.checkbox("Include Banquet", True)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            headboard_width = st.number_input("Headboard Width (mm)", 1200, 2200, 1600, 50)
-        with col2:
-            headboard_height = st.number_input("Headboard Height (mm)", 800, 1500, 1000, 50)
-        
-        st.markdown("**Bedside Tables:**")
-        col1, col2 = st.columns(2)
-        with col1:
-            bedside_width = st.number_input("Width (mm)", 300, 800, 500, 50)
-        with col2:
-            bedside_depth = st.number_input("Depth (mm)", 300, 600, 400, 50)
-        
-        st.markdown("### 🗄️ Storage & Furniture")
-        wardrobe_type_label = st.selectbox("Wardrobe Type", [
-            "Auto",
-            "Free sides (Straight)",
-            "Enclosed (Straight niche)",
-            "Walk-in L-shape",
-            "Walk-in U-shape"
-        ], index=0)
+            bed_wall_label = st.selectbox(
+                "Bed Wall (Anchoring)",
+                ["Auto", "Top", "Bottom", "Left", "Right"],
+                index=0,
+                help="Forces the bed group to anchor to the selected wall (cannot be the window wall)."
+            )
 
-        wardrobe_mode_map = {
-            "Auto": "auto",
-            "Free sides (Straight)": "free",
-            "Enclosed (Straight niche)": "enclosed",
-            "Walk-in L-shape": "walkin_l",
-            "Walk-in U-shape": "walkin_u"
-        }
-        wardrobe_mode = wardrobe_mode_map[wardrobe_type_label]
+            bed_wall_preference = {
+                "Auto": "auto",
+                "Top": "top",
+                "Bottom": "bottom",
+                "Left": "left",
+                "Right": "right",
+            }[bed_wall_label]
 
-        
-        wardrobe_width = st.number_input("Wardrobe Width (mm)", 1200, 4000, 1800, 100)
-        tv_unit_width = st.number_input("TV Unit Width (mm)", 800, 2000, 1200, 100)
-        dressing_table_width = st.number_input("Dressing Table Width (mm)", 800, 2000, 1200, 100)
-        
-        dressing_table_side = st.radio("Dressing Table Side", 
-                                      ["Right of TV", "Left of TV"])
-        
-        if include_banquet:
-            st.markdown("**Banquet:**")
+            bedside_table_count = st.slider("Bedside Tables", 0, 2, 2)
+            include_banquet = st.checkbox("Include Banquet", True)
+
             col1, col2 = st.columns(2)
             with col1:
-                banquet_width = st.number_input("Width (mm)", 1000, 2000, 1400, 50)
+                headboard_width = st.number_input("Headboard Width (mm)", 1200, 2200, 1600, 50)
             with col2:
-                banquet_depth = st.number_input("Depth (mm)", 300, 800, 500, 50)
-        
-        internal_wall_gap = st.number_input("Internal Wall Gap (mm)", 100, 500, 200, 50)
+                headboard_height = st.number_input("Headboard Height (mm)", 800, 1500, 1000, 50)
+
+            with st.expander("Bedside table dimensions", expanded=False):
+                col1, col2 = st.columns(2)
+                with col1:
+                    bedside_width = st.number_input("Width (mm)", 300, 800, 500, 50)
+                with col2:
+                    bedside_depth = st.number_input("Depth (mm)", 300, 600, 400, 50)
+
+        with st.expander("🗄️ Wardrobe", expanded=st.session_state.sidebar_expand_all):
+            wardrobe_width = st.number_input("Wardrobe Width (mm)", 1200, 4000, 1800, 100)
+
+            wardrobe_config_label = st.selectbox(
+                "Wardrobe configuration",
+                [
+                    "W-1 Centered (no return wall)",
+                    "W-2 Full wall (wall-to-wall)",
+                    "W-3 Built-in (return wall)",
+                ],
+                index=0,
+                help="W-1: centered on wall. W-2: spans entire wall if no door/window conflicts. W-3: built-in wardrobe with a 600mm return wall (120mm thick) placed to avoid the door arc."
+            )
+
+            wardrobe_config = {
+                "W-1 Centered (no return wall)": "centered",
+                "W-2 Full wall (wall-to-wall)": "full_wall",
+                "W-3 Built-in (return wall)": "built_in",
+            }[wardrobe_config_label]
+
+            wardrobe_type = "built_in" if wardrobe_config == "built_in" else "freestanding"
+            wardrobe_return_wall_enabled = wardrobe_config == "built_in"
+
+        with st.expander("📺 TV + Dressing", expanded=st.session_state.sidebar_expand_all):
+            tv_unit_width = st.number_input("TV Unit Width (mm)", 800, 2000, 1200, 100)
+            dressing_table_width = st.number_input("Dressing Table Width (mm)", 800, 2000, 1200, 100)
+            dressing_table_side = st.radio("Dressing Table Side", ["Right of TV", "Left of TV"])
+
+        if include_banquet:
+            with st.expander("🪑 Banquet", expanded=False):
+                col1, col2 = st.columns(2)
+                with col1:
+                    banquet_width = st.number_input("Width (mm)", 1000, 2000, 1400, 50)
+                with col2:
+                    banquet_depth = st.number_input("Depth (mm)", 300, 800, 500, 50)
+
+        with st.expander("🧱 Internal wall gap", expanded=False):
+            internal_wall_gap = st.number_input("Internal Wall Gap (mm)", 100, 500, 200, 50)
         
         st.markdown("### ⚡ Systems")
         
@@ -278,10 +312,15 @@ if generate_btn or st.session_state.layout:
                     window_wall=window_wall,
                     window_width=window_width,
                     window_sill=window_sill,
+                    under_window_use=under_window_use,
                     internal_wall_gap=internal_wall_gap,
                     bed_wall_preference=bed_wall_preference,
                     bed_type=bed_type_val,
-                    wardrobe_mode=wardrobe_mode,
+                    # Designer wardrobe controls
+                    wardrobe_mode="auto",  # legacy field (kept for compatibility)
+                    wardrobe_type=wardrobe_type,
+                    wardrobe_config=wardrobe_config,
+                    wardrobe_return_wall_enabled=wardrobe_return_wall_enabled,
                     wardrobe_width=wardrobe_width,
                     tv_unit_width=tv_unit_width,
                     dressing_table_width=dressing_table_width,

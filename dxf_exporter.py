@@ -110,6 +110,17 @@ def export_to_dxf(layout, filename=None):
             (int_wall_data['x'] + int_wall_data['width'], int_wall_data['y'] + int_wall_data['depth']),
             (int_wall_data['x'], int_wall_data['y'] + int_wall_data['depth'])
         ], is_closed=True)
+
+        # Optional wardrobe return walls / enclosures (built-in wardrobes)
+        for w in walls.get('wardrobe_enclosure', []) or []:
+            pts = [
+                (w['x'], w['y']),
+                (w['x'] + w['width'], w['y']),
+                (w['x'] + w['width'], w['y'] + w['depth']),
+                (w['x'], w['y'] + w['depth']),
+                (w['x'], w['y'])
+            ]
+            msp.add_lwpolyline(pts, dxfattribs={'layer': 'A-WALL-INT', 'lineweight': 50})
         
         # Draw door with ID and swing arc
         door = layout['architectural']['door']
