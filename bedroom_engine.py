@@ -223,20 +223,233 @@ class BedroomEngine:
         }
         
         return walls.get(wall_name)
-    
-    def check_collision(self, x, y, width, depth, clearance=0):
-        """Check if placement collides with existing furniture"""
-        for placed in self.placed_furniture:
-            # Add clearance buffer
-            px, py, pw, pd = placed['x'], placed['y'], placed['width'], placed['depth']
-            
-            # Check overlap with buffer
-            if not (x + width + clearance < px or 
-                    x > px + pw + clearance or 
-                    y + depth + clearance < py or 
-                    y > py + pd + clearance):
+
+    # -----------------------------
+    # HARD CONSTRAINT HELPERS
+    # -----------------------------
+    def _inner_bounds(self):
+        """Inner usable rectangle (inside the inner face of external walls).
+        Returns (xmin, ymin, xmax, ymax) in mm.
+        """
+        ext = self.external_wall_thickness
+        return (ext, ext, ext + self.internal_width, ext + self.internal_depth)
+
+    @staticmethod
+    def _rects_intersect(r1, r2):
+        x1, y1, w1, d1 = r1
+        x2, y2, w2, d2 = r2
+        return not (x1 + w1 <= x2 or x2 + w2 <= x1 or y1 + d1 <= y2 or y2 + d2 <= y1)
+
+    @staticmethod
+    def _expand_rect(r, pad):
+        x, y, w, d = r
+        return (x - pad, y - pad, w + 2 * pad, d + 2 * pad)
+
+    def _rect_inside_inner(self, x, y, w, d, pad=0):
+        xmin, ymin, xmax, ymax = self._inner_bounds()
+        return (x >= xmin + pad and y >= ymin + pad and (x + w) <= xmax - pad and (y + d) <= ymax - pad)
+
+    def _build_opening_keepouts(self, door, window):
+        """Build conservative HARD keep-out rectangles for door + window.
+
+        Door keep-out = swing bbox + approach rectangle (inside room).
+        Window keep-out = 300mm strip inside room along window span (tall items use 600mm).
+        """
+        ext = self.external_wall_thickness
+        xmin, ymin, xmax, ymax = self._inner_bounds()
+
+        keepouts = []
+
+        # Door keepouts (see constraints spec: approach=600, swing radius=door width)
+        approach = 600
+        swing_pad = 50
+
+        if door['wall'] in ('top', 'bottom'):
+            x0 = door['x']
+            x1 = door['x'] + self.door_width
+            if door['wall'] == 'top':
+                y_wall = ext + self.internal_depth
+                keepouts.append((x0, y_wall - approach, x1 - x0, approach))
+                hinge_x = x0 if door['hinge'] == 'left' else x1
+                sx0 = hinge_x if door['hinge'] == 'left' else hinge_x - self.door_width
+                keepouts.append((sx0, y_wall - self.door_width, self.door_width, self.door_width))
+            else:
+                y_wall = ext
+                keepouts.append((x0, y_wall, x1 - x0, approach))
+                hinge_x = x0 if door['hinge'] == 'left' else x1
+                sx0 = hinge_x if door['hinge'] == 'left' else hinge_x - self.door_width
+                keepouts.append((sx0, y_wall, self.door_width, self.door_width))
+
+        else:
+            y0 = door['y']
+            y1 = door['y'] + self.door_width
+            if door['wall'] == 'right':
+                x_wall = ext + self.internal_width
+                keepouts.append((x_wall - approach, y0, approach, y1 - y0))
+                hinge_y = y0 if door['hinge'] == 'left' else y1
+                sy0 = hinge_y if door['hinge'] == 'left' else hinge_y - self.door_width
+                keepouts.append((x_wall - self.door_width, sy0, self.door_width, self.door_width))
+            else:
+                x_wall = ext
+                keepouts.append((x_wall, y0, approach, y1 - y0))
+                hinge_y = y0 if door['hinge'] == 'left' else y1
+                sy0 = hinge_y if door['hinge'] == 'left' else hinge_y - self.door_width
+                keepouts.append((x_wall, sy0, self.door_width, self.door_width))
+
+        # Window keepout (base 300mm)
+        win_depth = 300
+        if window['wall'] in ('top', 'bottom'):
+            wx0 = window['x']
+            wx1 = window['x'] + self.window_width
+            if window['wall'] == 'top':
+                y_wall = ext + self.internal_depth
+                keepouts.append((wx0, y_wall - win_depth, wx1 - wx0, win_depth))
+            else:
+                y_wall = ext
+                keepouts.append((wx0, y_wall, wx1 - wx0, win_depth))
+        else:
+            wy0 = window['y']
+            wy1 = window['y'] + self.window_width
+            if window['wall'] == 'right':
+                x_wall = ext + self.internal_width
+                keepouts.append((x_wall - win_depth, wy0, win_depth, wy1 - wy0))
+            else:
+                x_wall = ext
+                keepouts.append((x_wall, wy0, win_depth, wy1 - wy0))
+
+        # Clip to inner bounds and pad door swing
+        clipped = []
+        for r in keepouts:
+            rr = self._expand_rect(r, swing_pad) if r in keepouts[:2] else r  # only pad door rects
+            x, y, w, d = rr
+            cx0 = max(xmin, x)
+            cy0 = max(ymin, y)
+            cx1 = min(xmax, x + w)
+            cy1 = min(ymax, y + d)
+            if cx1 > cx0 and cy1 > cy0:
+                clipped.append((cx0, cy0, cx1 - cx0, cy1 - cy0))
+        return clipped
+
+    def _collides_keepouts(self, x, y, w, d, item_height=0, clearance=0):
+        """Check intersection with door/window keepouts.
+
+        For tall items (height > 1500mm), window strip depth increases to 600mm.
+        """
+        rect = (x, y, w, d)
+        rect = self._expand_rect(rect, clearance) if clearance else rect
+
+        for k in getattr(self, '_keepouts', []):
+            # If this keepout corresponds to a window strip, optionally deepen for tall items.
+            kk = k
+            if item_height and item_height > 1500:
+                # Heuristic: if keepout is a shallow 300mm strip along a window wall, deepen to 600.
+                xk, yk, wk, dk = k
+                if dk <= 350:
+                    # Decide direction to deepen based on proximity to each boundary
+                    xmin, ymin, xmax, ymax = self._inner_bounds()
+                    # if strip touches top boundary (y+dk == ymax) deepen upward (towards ymin) by increasing dk and shifting y
+                    if abs((yk + dk) - ymax) < 2:
+                        kk = (xk, max(ymin, yk - 300), wk, dk + 300)
+                    # touches bottom
+                    elif abs(yk - ymin) < 2:
+                        kk = (xk, yk, wk, dk + 300)
+                    # touches right
+                    elif abs((xk + wk) - xmax) < 2:
+                        kk = (max(xmin, xk - 300), yk, wk + 300, dk)
+                    # touches left
+                    elif abs(xk - xmin) < 2:
+                        kk = (xk, yk, wk + 300, dk)
+
+            if self._rects_intersect(rect, kk):
                 return True
-        
+        return False
+
+    def _can_place_rect(self, x, y, w, d, item_height=0, clearance=0):
+        """Hard check: inside inner bounds, no collision with furniture, no collision with keepouts."""
+        if not self._rect_inside_inner(x, y, w, d, pad=0):
+            return False
+        if self._collides_keepouts(x, y, w, d, item_height=item_height, clearance=clearance):
+            return False
+        if self.check_collision(x, y, w, d, clearance=clearance):
+            return False
+        return True
+
+    def _slide_along_wall_to_fit(self, wall_name, along, into, *, item_height=0, clearance=0, preferred_offset=None):
+        """Try to place a wall-attached item by sliding it along the wall until it passes hard constraints.
+
+        Returns (x,y,w,d,offset_used) or None.
+        """
+        wall = self.get_wall_info(wall_name)
+        if not wall:
+            return None
+
+        # Determine feasible offset range along wall
+        max_off = max(0, wall['length'] - along)
+
+        # Build forbidden intervals from openings (buffered)
+        intervals = self._opening_intervals_on_wall(wall_name)
+
+        def ok_offset(off):
+            # Does [off, off+along] overlap any forbidden interval?
+            for a,b in intervals:
+                if not (off + along <= a or off >= b):
+                    return False
+            return 0 <= off <= max_off
+
+        # Candidate offsets: start with preferred, then expand outwards in steps
+        step = 50
+        start = 0 if preferred_offset is None else float(preferred_offset)
+        start = max(0, min(max_off, start))
+
+        tried=set()
+        def try_off(off):
+            off = max(0, min(max_off, off))
+            if off in tried:
+                return None
+            tried.add(off)
+            if not ok_offset(off):
+                return None
+            x,y,w,d = self.place_item_on_wall(wall_name, along, into, offset_from_start=off, center=False)
+            if self._can_place_rect(x,y,w,d,item_height=item_height,clearance=clearance):
+                return (x,y,w,d,off)
+            return None
+
+        # 1) preferred
+        cand = try_off(start)
+        if cand:
+            return cand
+
+        # 2) scan alternating left/right
+        for k in range(1, int(max_off/step)+2):
+            for off in (start - k*step, start + k*step):
+                cand = try_off(off)
+                if cand:
+                    return cand
+
+        # 3) full coarse scan (rare fallback)
+        for off in range(0, int(max_off)+1, step):
+            cand = try_off(off)
+            if cand:
+                return cand
+
+        return None
+    
+
+    def check_collision(self, x, y, width, depth, clearance=0):
+        """Check if a placement collides with already placed furniture.
+
+        Uses conservative AABB checks with symmetric clearance.
+        """
+        cand = (x, y, width, depth)
+        cand = self._expand_rect(cand, clearance) if clearance else cand
+
+        for placed in self.placed_furniture:
+            px, py, pw, pd = placed['x'], placed['y'], placed['width'], placed['depth']
+            pr = (px, py, pw, pd)
+            pr = self._expand_rect(pr, clearance) if clearance else pr
+            if self._rects_intersect(cand, pr):
+                return True
+
         return False
     
     def is_wall_available(self, wall_name, required_length, check_openings=True):
@@ -652,10 +865,51 @@ class BedroomEngine:
                 'sill_height': self.window_sill
             }
         
-        # 4. BED - Find best wall and place
+        # 3.5 OPENING KEEP-OUT ZONES (HARD)
+        # Conservative rectangles used to prevent furniture overlapping doors/windows.
+        self._keepouts = self._build_opening_keepouts(door, window)
+
+        # 4. BED + BEDSIDE GROUP (HARD FIT)
         bed_wall = self.find_best_bed_wall()
-        bed_x, bed_y, bed_w, bed_d = self.place_item_on_wall(bed_wall, self.bed_width, self.bed_depth, center=True)
-        
+
+        # If the bed group is tight, shrink bedside width but never delete tables.
+        bst_count = max(0, min(int(self.bedside_table_count), 2))
+        bst_w = int(self.bedside_table_width) if bst_count else 0
+        bst_d = int(self.bedside_table_depth) if bst_count else 0
+
+        if bst_count:
+            wall = self.get_wall_info(bed_wall)
+            margin = 100
+            needed = self.bed_width + (bst_w * bst_count)
+            if wall['length'] < needed + margin:
+                avail = max(0.0, wall['length'] - self.bed_width - margin)
+                bst_w = int(max(350.0, avail / bst_count))
+                self.bedside_table_width = bst_w
+                self.furniture_specs['bedside_table_left']['width'] = bst_w
+                self.furniture_specs['bedside_table_right']['width'] = bst_w
+
+        group_along = self.bed_width + (bst_w * bst_count)
+
+        # Place the whole bed-group first so nothing can drift out of bounds or into openings.
+        grp_x, grp_y, grp_w, grp_d = self._slide_along_wall_to_fit(
+            bed_wall,
+            group_along,
+            self.bed_depth,
+            item_height=self.furniture_specs['bed'].get('height', 0),
+            clearance=0,
+            preferred_offset=None,
+        )
+
+        # Derive bed placement inside the group (tables touch bed with no gap by design).
+        if bed_wall in ('top', 'bottom'):
+            bed_x = grp_x + (bst_w if bst_count else 0)
+            bed_y = grp_y
+            bed_w, bed_d = self.bed_width, self.bed_depth
+        else:
+            bed_x = grp_x
+            bed_y = grp_y + (bst_w if bst_count else 0)
+            bed_w, bed_d = self.bed_depth, self.bed_width  # swapped by global axis alignment
+
         bed_data = {
             **self.furniture_specs['bed'],
             'x': bed_x,
@@ -665,10 +919,31 @@ class BedroomEngine:
             'wall': bed_wall
         }
         self.placed_furniture.append(bed_data)
-        
-        # 5. HEADBOARD - Place behind bed
-        headboard_x, headboard_y, headboard_w, headboard_d = self.place_item_on_wall(bed_wall, self.headboard_width, 50, center=True)
-        
+
+        # 5. HEADBOARD - Same wall as bed; align to bed center; never overlaps keepouts.
+        if bed_wall in ('top', 'bottom'):
+            bed_center = bed_x + bed_w / 2
+            hb_off = max(0.0, bed_center - self.headboard_width / 2 - self.external_wall_thickness)
+            headboard_x, headboard_y, headboard_w, headboard_d = self._slide_along_wall_to_fit(
+                bed_wall,
+                self.headboard_width,
+                50,
+                item_height=self.furniture_specs['headboard'].get('height', 0),
+                clearance=0,
+                preferred_offset=hb_off,
+            )
+        else:
+            bed_center = bed_y + bed_d / 2
+            hb_off = max(0.0, bed_center - self.headboard_width / 2 - self.external_wall_thickness)
+            headboard_x, headboard_y, headboard_w, headboard_d = self._slide_along_wall_to_fit(
+                bed_wall,
+                self.headboard_width,
+                50,
+                item_height=self.furniture_specs['headboard'].get('height', 0),
+                clearance=0,
+                preferred_offset=hb_off,
+            )
+
         headboard_data = {
             **self.furniture_specs['headboard'],
             'x': headboard_x,
@@ -677,71 +952,63 @@ class BedroomEngine:
             'depth': headboard_d,
             'wall': bed_wall
         }
-        
-        # 6. BEDSIDE TABLES - RIGIDLY ANCHORED TO BED GROUP
+
+        # 5.5 Package initial furniture
         furniture = {'bed': bed_data, 'headboard': headboard_data}
-
-        # Never delete bedside tables. If the bed wall is tight, shrink bedside width to fit.
-        if self.bedside_table_count > 0:
-            wall = self.get_wall_info(bed_wall)
-            needed = self.bed_width + (self.bedside_table_width * self.bedside_table_count)
-            margin = 100
-            if wall['length'] < needed + margin:
-                # Shrink bedside tables but keep a sane minimum
-                avail = max(0, wall['length'] - self.bed_width - margin)
-                new_w = max(350, avail / self.bedside_table_count)
-                self.bedside_table_width = int(new_w)
-                self.furniture_specs['bedside_table_left']['width'] = self.bedside_table_width
-                self.furniture_specs['bedside_table_right']['width'] = self.bedside_table_width
-
-        # Bedside tables must TOUCH the bed and remain part of the rigid bed group.
-        # NOTE: Layout rectangles are axis-aligned, so on vertical walls we must swap dims.
-        if self.bedside_table_count >= 1:
-            if bed_wall in ['top', 'bottom']:
-                bst_left_x = bed_x - self.bedside_table_width
+# 6. BEDSIDE TABLES (RIGID GROUP; NEVER OVERLAP OR PENETRATE)
+        if bst_count >= 1:
+            if bed_wall in ('top', 'bottom'):
+                # Left table
+                bst_left_x = grp_x
                 bst_left_y = bed_y
-                bst_left_w = self.bedside_table_width
-                bst_left_d = self.bedside_table_depth
+                bst_left_w = bst_w
+                bst_left_d = bst_d
             else:
-                # Along wall is Y, into room is X
+                # Vertical wall: into-room is X (bst_d), along-wall is Y (bst_w)
                 bst_left_x = bed_x
-                bst_left_y = bed_y - self.bedside_table_width
-                bst_left_w = self.bedside_table_depth
-                bst_left_d = self.bedside_table_width
+                bst_left_y = grp_y
+                bst_left_w = bst_d
+                bst_left_d = bst_w
 
-            bst_left_data = {
-                **self.furniture_specs['bedside_table_left'],
-                'x': bst_left_x,
-                'y': bst_left_y,
-                'width': bst_left_w,
-                'depth': bst_left_d,
-                'wall': bed_wall
-            }
-            furniture['bedside_table_left'] = bst_left_data
-            self.placed_furniture.append(bst_left_data)
+            if self._can_place_rect(bst_left_x, bst_left_y, bst_left_w, bst_left_d, item_height=self.furniture_specs['bedside_table_left'].get('height',0), clearance=0):
+                bst_left_data = {
+                    **self.furniture_specs['bedside_table_left'],
+                    'x': bst_left_x,
+                    'y': bst_left_y,
+                    'width': bst_left_w,
+                    'depth': bst_left_d,
+                    'wall': bed_wall
+                }
+                furniture['bedside_table_left'] = bst_left_data
+                self.placed_furniture.append(bst_left_data)
+            else:
+                validation_issues.append('Bedside table (left) could not be placed without violating HARD constraints.')
 
-        if self.bedside_table_count == 2:
-            if bed_wall in ['top', 'bottom']:
+        if bst_count >= 2:
+            if bed_wall in ('top', 'bottom'):
                 bst_right_x = bed_x + bed_w
                 bst_right_y = bed_y
-                bst_right_w = self.bedside_table_width
-                bst_right_d = self.bedside_table_depth
+                bst_right_w = bst_w
+                bst_right_d = bst_d
             else:
                 bst_right_x = bed_x
                 bst_right_y = bed_y + bed_d
-                bst_right_w = self.bedside_table_depth
-                bst_right_d = self.bedside_table_width
+                bst_right_w = bst_d
+                bst_right_d = bst_w
 
-            bst_right_data = {
-                **self.furniture_specs['bedside_table_right'],
-                'x': bst_right_x,
-                'y': bst_right_y,
-                'width': bst_right_w,
-                'depth': bst_right_d,
-                'wall': bed_wall
-            }
-            furniture['bedside_table_right'] = bst_right_data
-            self.placed_furniture.append(bst_right_data)
+            if self._can_place_rect(bst_right_x, bst_right_y, bst_right_w, bst_right_d, item_height=self.furniture_specs['bedside_table_right'].get('height',0), clearance=0):
+                bst_right_data = {
+                    **self.furniture_specs['bedside_table_right'],
+                    'x': bst_right_x,
+                    'y': bst_right_y,
+                    'width': bst_right_w,
+                    'depth': bst_right_d,
+                    'wall': bed_wall
+                }
+                furniture['bedside_table_right'] = bst_right_data
+                self.placed_furniture.append(bst_right_data)
+            else:
+                validation_issues.append('Bedside table (right) could not be placed without violating HARD constraints.')
 
         # 7. WARDROBE OPTIONS (explicit user mode + auto thresholds)
         mode = self.resolve_wardrobe_mode()
@@ -792,10 +1059,14 @@ class BedroomEngine:
                     self.furniture_specs['wardrobe']['width'] = int(required_len)
                     off = a + (max_len - required_len) / 2
 
-        if off is None:
-            wardrobe_x, wardrobe_y, wardrobe_w, wardrobe_d = self.place_item_on_wall(wardrobe_wall, self.wardrobe_width, 600, center=True)
-        else:
-            wardrobe_x, wardrobe_y, wardrobe_w, wardrobe_d = self.place_item_on_wall(wardrobe_wall, self.wardrobe_width, 600, offset_from_start=off, center=False)
+        wardrobe_x, wardrobe_y, wardrobe_w, wardrobe_d = self._slide_along_wall_to_fit(
+            wardrobe_wall,
+            self.wardrobe_width,
+            600,
+            item_height=self.furniture_specs['wardrobe'].get('height', 0),
+            clearance=0,
+            preferred_offset=off,
+        )
 
         wardrobe_data = {
             **self.furniture_specs['wardrobe'],
