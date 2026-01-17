@@ -933,7 +933,8 @@ class BedroomEngine:
         def _try_place_bedside_tables():
             placed = {'left': False, 'right': False}
             # Try shrinking bedside tables if needed (designer behavior)
-            min_w = 350.0
+            # Absolute minimum for a functional bedside table
+            min_w = 300.0
             min_d = 300.0
             w0 = float(self.bedside_table_width)
             d0 = float(self.bedside_table_depth)
@@ -953,11 +954,14 @@ class BedroomEngine:
                     else:
                         tL = (bed_x, bed_y - tw, td, tw)
                         tR = (bed_x, bed_y + bed_d, td, tw)
-                    if self._rect_inside_container(tL, container) and (not self._collides(tL, occupied)):
+                    # Bedside tables are part of the bed group and are allowed to overlap the
+                    # "bed_access" clearance zones (those zones are for other furniture only).
+                    occ_no_access = [o for o in occupied if o.get('tag') != 'bed_access']
+                    if self._rect_inside_container(tL, container) and (not self._collides(tL, occ_no_access)):
                         furniture['bedside_table_left'] = {**self.furniture_specs['bedside_table_left'], 'x': tL[0], 'y': tL[1], 'width': tL[2], 'depth': tL[3], 'wall': bed_wall}
                         self._add_occupied(occupied, tL, 'bedside')
                         placed['left'] = True
-                    if self._rect_inside_container(tR, container) and (not self._collides(tR, occupied)):
+                    if self._rect_inside_container(tR, container) and (not self._collides(tR, occ_no_access)):
                         furniture['bedside_table_right'] = {**self.furniture_specs['bedside_table_right'], 'x': tR[0], 'y': tR[1], 'width': tR[2], 'depth': tR[3], 'wall': bed_wall}
                         self._add_occupied(occupied, tR, 'bedside')
                         placed['right'] = True
