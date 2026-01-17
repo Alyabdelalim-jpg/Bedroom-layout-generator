@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0",
+  "defaults": {
+    "room_width_mm": 4500,
+    "room_depth_mm": 4000,
+    "room_height_mm": 3000,
+    "door_wall": "top",
+    "door_offset_mm": 200,
+    "door_width_mm": 900,
+    "door_hinge_side": "left",
+    "door_swing": "inward",
+    "window_wall": "right",
+    "window_width_mm": 1800,
+    "window_sill_mm": 300,
+    "under_window_use": "auto",
+    "include_under_window_chair": true,
+    "bed_preset": "queen_1600x2000",
+    "bed_wall": "auto",
+    "bedside_table_width_mm": 450,
+    "bedside_table_depth_mm": 400,
+    "wardrobe_enabled": true,
+    "wardrobe_type": "freestanding",
+    "wardrobe_mode": "centered",
+    "wardrobe_width_mm": 1800,
+    "wardrobe_depth_mm": 600,
+    "wardrobe_return_wall_enabled": false,
+    "wardrobe_return_wall_side": "auto",
+    "wardrobe_return_wall_length_mm": 600,
+    "wardrobe_return_wall_thickness_mm": 120,
+    "tv_enabled": true,
+    "tv_unit_width_mm": 1200,
+    "dressing_table_enabled": false,
+    "dressing_table_width_mm": 1000,
+    "dressing_table_side": "right_of_tv"
+  },
+  "controls": [
+    {
+      "category": "Room",
+      "items": [
+        {
+          "key": "room_width_mm",
+          "label": "Width (mm) - Internal",
+          "type": "int",
+          "min": 2000,
+          "max": 10000,
+          "step": 100
+        },
+        {
+          "key": "room_depth_mm",
+          "label": "Depth (mm) - Internal",
+          "type": "int",
+          "min": 2000,
+          "max": 10000,
+          "step": 100
+        },
+        {
+          "key": "room_height_mm",
+          "label": "Height (mm)",
+          "type": "int",
+          "min": 2400,
+          "max": 5000,
+          "step": 100
+        }
+      ]
+    },
+    {
+      "category": "Door",
+      "items": [
+        {
+          "key": "door_wall",
+          "type": "enum",
+          "options": [
+            "top",
+            "bottom",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "key": "door_offset_mm",
+          "type": "int",
+          "min": 0,
+          "max": 9000,
+          "step": 50
+        },
+        {
+          "key": "door_width_mm",
+          "type": "int",
+          "min": 600,
+          "max": 1200,
+          "step": 50
+        },
+        {
+          "key": "door_hinge_side",
+          "type": "enum",
+          "options": [
+            "left",
+            "right"
+          ]
+        },
+        {
+          "key": "door_swing",
+          "type": "enum",
+          "options": [
+            "inward",
+            "outward"
+          ]
+        }
+      ]
+    }
+  ]
+}

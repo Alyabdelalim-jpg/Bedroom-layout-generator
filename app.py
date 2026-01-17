@@ -9,6 +9,22 @@ matplotlib.use('Agg')
 from bedroom_engine import BedroomEngine
 from dxf_exporter import export_to_dxf
 
+# ---- UI Defaults / Controls (single source of truth) ----
+def _load_ui_controls(path: str = "ui_controls.json"):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"defaults": {}}
+
+_UI = _load_ui_controls()
+_DEFAULTS = _UI.get("defaults", {})
+
+def ensure_state(key: str, default):
+    if key not in st.session_state:
+        st.session_state[key] = default
+    return st.session_state[key]
+
 # Page configuration
 st.set_page_config(
     page_title="Professional Bedroom Designer",
@@ -120,22 +136,24 @@ with st.sidebar:
 
     st.markdown("### ⚙️ Input Method")
 
-    # ---- Persistent UI defaults (enables automatic "revert" when inputs are invalid) ----
-    _defaults = {
-        'wardrobe_width': 1800,
-        'wardrobe_depth': 600,
-        'tv_unit_width': 1200,
-        'include_tv': True,
-        'include_dressing_table': True,
-        'dressing_table_width': 1200,
-        'include_dresser': False,
-        'dresser_width': 1200,
-        'dresser_depth': 500,
-        'include_chair': True,
-    }
-    for _k, _v in _defaults.items():
-        if _k not in st.session_state:
-            st.session_state[_k] = _v
+    # ---- Persistent UI defaults (single source of truth: ui_controls.json) ----
+    for _k, _v in _DEFAULTS.items():
+        ensure_state(_k, _v)
+
+    # Back-compat keys used by earlier sidebar widgets
+    ensure_state('wardrobe_width', st.session_state.get('wardrobe_width_mm', 1800))
+    ensure_state('wardrobe_depth', st.session_state.get('wardrobe_depth_mm', 600))
+    ensure_state('tv_unit_width', st.session_state.get('tv_unit_width_mm', 1200))
+    ensure_state('dressing_table_width', st.session_state.get('dressing_table_width_mm', 1000))
+    ensure_state('dresser_width', st.session_state.get('dresser_width_mm', 1200))
+    ensure_state('dresser_depth', st.session_state.get('dresser_depth_mm', 500))
+    ensure_state('include_tv', st.session_state.get('tv_enabled', True))
+    ensure_state('include_dressing_table', st.session_state.get('dressing_table_enabled', False))
+    ensure_state('include_dresser', st.session_state.get('include_dresser', False))
+    ensure_state('include_chair', st.session_state.get('include_under_window_chair', True))
+    ensure_state('include_banquet', False)
+    ensure_state('headboard_width_mm', 1600)
+    ensure_state('headboard_height_mm', 1000)
     
     input_method = st.radio("Choose input method:", 
                            ["Manual Parameters", "Upload DXF (Coming Soon)"], 
@@ -151,29 +169,95 @@ with st.sidebar:
         with st.expander("📐 Room", expanded=st.session_state.sidebar_expand_all):
             col1, col2 = st.columns(2)
             with col1:
-                width = st.number_input("Width (mm) - Internal", 2000, 10000, 3900, 100)
+                width = st.number_input(
+                    "Width (mm) - Internal",
+                    2000, 10000,
+                    int(st.session_state.get('room_width_mm', 4500)),
+                    100,
+                    key='room_width_mm'
+                )
             with col2:
-                depth = st.number_input("Depth (mm) - Internal", 2000, 10000, 3600, 100)
-
-            height = st.number_input("Height (mm)", 2400, 5000, 3000, 100)
+                depth = st.number_input(
+                    "Depth (mm) - Internal",
+                    2000, 10000,
+                    int(st.session_state.get('room_depth_mm', 4000)),
+                    100,
+                    key='room_depth_mm'
+                )
+            height = st.number_input(
+                "Height (mm)",
+                2400, 5000,
+                int(st.session_state.get('room_height_mm', 3000)),
+                100,
+                key='room_height_mm'
+            )
 
         # --- Doors & Windows ---
         with st.expander("🚪 Doors", expanded=st.session_state.sidebar_expand_all):
-            door_wall = st.selectbox("Door Wall", ["top", "bottom", "left", "right"], index=0)
-            door_from_wall = st.number_input("Door offset from corner (mm)", 0, int(max(0, min(width, depth) - 600)), 200, 50)
-            door_width = st.number_input("Door Width (mm)", 600, 1200, 900, 50)
+            door_wall = st.selectbox(
+                "Door Wall",
+                ["top", "bottom", "left", "right"],
+                index=["top","bottom","left","right"].index(st.session_state.get('door_wall','top')),
+                key='door_wall'
+            )
+            _door_max = int(max(0, min(width, depth) - 600))
+            # clamp stored value into dynamic range
+            if st.session_state.get('door_offset_mm', 0) > _door_max:
+                st.session_state['door_offset_mm'] = _door_max
+            door_from_wall = st.number_input(
+                "Door offset from corner (mm)",
+                0, _door_max,
+                int(st.session_state.get('door_offset_mm', 200)),
+                50,
+                key='door_offset_mm'
+            )
+            door_width = st.number_input(
+                "Door Width (mm)",
+                600, 1200,
+                int(st.session_state.get('door_width_mm', 900)),
+                50,
+                key='door_width_mm'
+            )
             col_d1, col_d2 = st.columns(2)
             with col_d1:
-                door_hinge = st.selectbox("Hinge Side", ["left", "right"], index=0)
+                door_hinge = st.selectbox(
+                    "Hinge Side",
+                    ["left", "right"],
+                    index=["left","right"].index(st.session_state.get('door_hinge_side','left')),
+                    key='door_hinge_side'
+                )
             with col_d2:
-                door_swing = st.selectbox("Swing", ["inward", "outward"], index=0)
+                door_swing = st.selectbox(
+                    "Swing",
+                    ["inward", "outward"],
+                    index=["inward","outward"].index(st.session_state.get('door_swing','inward')),
+                    key='door_swing'
+                )
 
         with st.expander("🪟 Windows", expanded=st.session_state.sidebar_expand_all):
-            window_wall = st.selectbox("Window Wall", ["right", "left", "bottom", "top"], index=0)
-            window_width = st.number_input("Window Width (mm)", 800, 3000, 1800, 100)
-            window_sill = st.number_input("Window Sill (mm)", 200, 1200, 300, 50)
+            window_wall = st.selectbox(
+                "Window Wall",
+                ["right", "left", "bottom", "top"],
+                index=["right","left","bottom","top"].index(st.session_state.get('window_wall','right')),
+                key='window_wall'
+            )
+            window_width = st.number_input(
+                "Window Width (mm)",
+                800, 3000,
+                int(st.session_state.get('window_width_mm', 1800)),
+                100,
+                key='window_width_mm'
+            )
+            window_sill = st.number_input(
+                "Window Sill (mm)",
+                200, 1200,
+                int(st.session_state.get('window_sill_mm', 300)),
+                50,
+                key='window_sill_mm'
+            )
 
             # Under-window options based on sill height rules
+            _uw_prev = st.session_state.get('under_window_use', 'auto')
             if window_sill < 450:
                 st.info("Sill < 450mm → keep window wall clear (no bench/desk).")
                 under_window_use = 'none'
@@ -181,19 +265,22 @@ with st.sidebar:
                 under_window_use = st.selectbox(
                     "Under-window option (450–600mm sill)",
                     ["none", "bench"],
-                    index=0,
+                    index=["none","bench"].index('bench' if _uw_prev=='bench' else 'none'),
                     help="Bench is allowed below window when sill is 450–600mm."
                 )
             elif 600 <= window_sill <= 900:
                 under_window_use = st.selectbox(
                     "Under-window option (600–900mm sill)",
                     ["none", "bench", "study_table"],
-                    index=0,
+                    index=["none","bench","study_table"].index(_uw_prev if _uw_prev in ["none","bench","study_table"] else "none"),
                     help="Bench OR study table is allowed when sill is 600–900mm. Study table will face the window (desk against window wall)."
                 )
             else:
                 st.info("Sill outside typical range → keeping window wall clear for safety.")
                 under_window_use = 'none'
+
+            # Persist the selection so next rerun keeps it
+            st.session_state['under_window_use'] = under_window_use
 
             # Optional chair (only meaningful when a study table exists)
             if under_window_use == 'study_table':
@@ -206,9 +293,26 @@ with st.sidebar:
                 include_chair = False
 
         with st.expander("🛏️ Bed group", expanded=st.session_state.sidebar_expand_all):
-            bed_type = st.selectbox("Bed Size", [
-                "King (1800x2000)", "Queen (1600x2000)", "Double (1400x1900)", "Single (1200x1900)"
-            ])
+            # Default bed preset is driven by ui_controls.json
+            _bed_labels = [
+                "King (1800x2000)",
+                "Queen (1600x2000)",
+                "Double (1400x1900)",
+                "Single (1200x1900)",
+            ]
+            _bed_key_to_label = {
+                "king_1800x2000": "King (1800x2000)",
+                "queen_1600x2000": "Queen (1600x2000)",
+                "double_1400x1900": "Double (1400x1900)",
+                "single_1200x1900": "Single (1200x1900)",
+            }
+            _default_bed_label = _bed_key_to_label.get(st.session_state.get('bed_preset', 'queen_1600x2000'), "Queen (1600x2000)")
+            bed_type = st.selectbox(
+                "Bed Size",
+                _bed_labels,
+                index=_bed_labels.index(_default_bed_label),
+                key='bed_size_label'
+            )
 
             bed_wall_label = st.selectbox(
                 "Bed Wall (Anchoring)",
@@ -225,26 +329,50 @@ with st.sidebar:
                 "Right": "right",
             }[bed_wall_label]
 
-            bedside_table_count = st.slider("Bedside Tables", 0, 2, 2)
-            include_banquet = st.checkbox("Include Banquet", True)
+            bedside_table_count = st.slider("Bedside Tables", 0, 2, 2, key='bedside_table_count')
+            include_banquet = st.checkbox("Include Banquet", bool(st.session_state.get('include_banquet', False)), key='include_banquet')
 
             col1, col2 = st.columns(2)
             with col1:
-                headboard_width = st.number_input("Headboard Width (mm)", 1200, 2200, 1600, 50)
+                headboard_width = st.number_input(
+                    "Headboard Width (mm)",
+                    1200, 2200,
+                    int(st.session_state.get('headboard_width_mm', 1600)),
+                    50,
+                    key='headboard_width_mm'
+                )
             with col2:
-                headboard_height = st.number_input("Headboard Height (mm)", 800, 1500, 1000, 50)
+                headboard_height = st.number_input(
+                    "Headboard Height (mm)",
+                    800, 1500,
+                    int(st.session_state.get('headboard_height_mm', 1000)),
+                    50,
+                    key='headboard_height_mm'
+                )
 
             # NOTE: Streamlit does not allow nested expanders.
             # Use an "Advanced" toggle instead of an expander inside an expander.
-            bedside_width = 500
-            bedside_depth = 400
+            bedside_width = int(st.session_state.get('bedside_table_width_mm', 450))
+            bedside_depth = int(st.session_state.get('bedside_table_depth_mm', 400))
             show_bedside_adv = st.checkbox("Advanced: bedside table dimensions", value=False)
             if show_bedside_adv:
                 col1, col2 = st.columns(2)
                 with col1:
-                    bedside_width = st.number_input("Bedside Width (mm)", 300, 800, 500, 50)
+                    bedside_width = st.number_input(
+                        "Bedside Width (mm)",
+                        300, 800,
+                        int(st.session_state.get('bedside_table_width_mm', 450)),
+                        50,
+                        key='bedside_table_width_mm'
+                    )
                 with col2:
-                    bedside_depth = st.number_input("Bedside Depth (mm)", 300, 600, 400, 50)
+                    bedside_depth = st.number_input(
+                        "Bedside Depth (mm)",
+                        300, 600,
+                        int(st.session_state.get('bedside_table_depth_mm', 400)),
+                        50,
+                        key='bedside_table_depth_mm'
+                    )
 
         with st.expander("🗄️ Wardrobe", expanded=st.session_state.sidebar_expand_all):
             colw1, colw2 = st.columns(2)
@@ -398,58 +526,93 @@ if generate_btn or st.session_state.layout:
         
         try:
             with st.spinner("🔄 Generating complete design with BOQ..."):
-                engine = BedroomEngine(
-                    width=width,
-                    depth=depth,
-                    height=height,
-                    door_from_wall=door_from_wall,
-                    door_width=door_width,
-                    door_wall=door_wall,
-                    door_hinge=door_hinge,
-                    door_swing=door_swing,
-                    door_open_angle_deg=45,
-                    window_wall=window_wall,
-                    window_width=window_width,
-                    window_sill=window_sill,
-                    under_window_use=under_window_use,
-                    internal_wall_gap=internal_wall_gap,
-                    bed_wall_preference=bed_wall_preference,
-                    bed_type=bed_type_val,
-                    # Designer wardrobe controls
-                    wardrobe_mode="auto",  # legacy field (kept for compatibility)
-                    wardrobe_type=wardrobe_type,
-                    wardrobe_config=wardrobe_config,
-                    wardrobe_return_wall_enabled=wardrobe_return_wall_enabled,
-                    wardrobe_allow_fallback=wardrobe_allow_fallback,
-                    wardrobe_width=wardrobe_width,
-                    wardrobe_depth=wardrobe_depth,
-                    include_tv=include_tv,
-                    include_dressing_table=include_dressing_table,
-                    include_dresser=include_dresser,
-                    dresser_width=dresser_width if include_dresser else 1200,
-                    dresser_depth=dresser_depth if include_dresser else 500,
-                    include_chair=include_chair,
-                    tv_unit_width=tv_unit_width,
-                    dressing_table_width=dressing_table_width,
-                    bedside_table_count=bedside_table_count,
-                    bedside_table_width=bedside_width,
-                    bedside_table_depth=bedside_depth,
-                    headboard_width=headboard_width,
-                    headboard_height=headboard_height,
-                    include_banquet=include_banquet,
-                    banquet_width=banquet_width if include_banquet else 1400,
-                    banquet_depth=banquet_depth if include_banquet else 500,
-                    ac_type=ac_type,
-                    lighting_type=lighting_type,
-                    include_electrical=include_electrical,
-                    include_lighting=include_lighting,
-                    include_ac=include_ac
-                )
-                
-                layout = engine.calculate_layout(dressing_table_side=dt_side)
+                def _run_with_bed(bed_type_val_run: str):
+                    engine = BedroomEngine(
+                        width=width,
+                        depth=depth,
+                        height=height,
+                        door_from_wall=door_from_wall,
+                        door_width=door_width,
+                        door_wall=door_wall,
+                        door_hinge=door_hinge,
+                        door_swing=door_swing,
+                        door_open_angle_deg=45,
+                        window_wall=window_wall,
+                        window_width=window_width,
+                        window_sill=window_sill,
+                        under_window_use=under_window_use,
+                        internal_wall_gap=internal_wall_gap,
+                        bed_wall_preference=bed_wall_preference,
+                        bed_type=bed_type_val_run,
+                        # Designer wardrobe controls
+                        wardrobe_mode="auto",  # legacy field (kept for compatibility)
+                        wardrobe_type=wardrobe_type,
+                        wardrobe_config=wardrobe_config,
+                        wardrobe_return_wall_enabled=wardrobe_return_wall_enabled,
+                        wardrobe_allow_fallback=wardrobe_allow_fallback,
+                        wardrobe_width=wardrobe_width,
+                        wardrobe_depth=wardrobe_depth,
+                        include_tv=include_tv,
+                        include_dressing_table=include_dressing_table,
+                        include_dresser=include_dresser,
+                        dresser_width=dresser_width if include_dresser else 1200,
+                        dresser_depth=dresser_depth if include_dresser else 500,
+                        include_chair=include_chair,
+                        tv_unit_width=tv_unit_width,
+                        dressing_table_width=dressing_table_width,
+                        bedside_table_count=bedside_table_count,
+                        bedside_table_width=bedside_width,
+                        bedside_table_depth=bedside_depth,
+                        headboard_width=headboard_width,
+                        headboard_height=headboard_height,
+                        include_banquet=include_banquet,
+                        banquet_width=banquet_width if include_banquet else 1400,
+                        banquet_depth=banquet_depth if include_banquet else 500,
+                        ac_type=ac_type,
+                        lighting_type=lighting_type,
+                        include_electrical=include_electrical,
+                        include_lighting=include_lighting,
+                        include_ac=include_ac
+                    )
+                    layout = engine.calculate_layout(dressing_table_side=dt_side)
+                    return engine, layout
+
+                # Adaptive ladder: if bedside tables are impossible, retry with a smaller bed preset.
+                bed_order = ["king", "queen", "double", "single"]
+                start_i = bed_order.index(bed_type_val)
+                attempts = bed_order[start_i:]
+
+                last_error = None
+                engine = None
+                layout = None
+                for attempt_bed in attempts:
+                    try:
+                        engine, layout = _run_with_bed(attempt_bed)
+                        if attempt_bed != bed_type_val:
+                            # write back the adapted choice so UI stays consistent
+                            label_map = {
+                                "king": "King (1800x2000)",
+                                "queen": "Queen (1600x2000)",
+                                "double": "Double (1400x1900)",
+                                "single": "Single (1200x1900)",
+                            }
+                            st.session_state['bed_size_label'] = label_map[attempt_bed]
+                            st.warning(f"Bed size was reduced to {label_map[attempt_bed]} to fit two bedside tables.")
+                        break
+                    except Exception as e2:
+                        last_error = e2
+                        msg = str(e2).lower()
+                        # Only ladder-adapt on bedside-table constraints; otherwise stop immediately.
+                        if "bedside" not in msg:
+                            raise
+                        continue
+
+                if layout is None:
+                    raise last_error if last_error else Exception("Design failed.")
+
                 st.session_state.layout = layout
                 st.session_state.engine = engine
-                
+
                 st.success(f"✅ Design generated! Room ID: {layout['room']['id']}")
 
                 # --- Validation + auto-revert (when engine corrects the user inputs) ---
